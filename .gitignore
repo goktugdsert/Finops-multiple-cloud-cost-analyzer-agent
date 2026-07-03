@@ -1,0 +1,44 @@
+# --- Secrets (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+.aws/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- uv ---
+# uv.lock IS committed; the cache is not.
+.uv/
+
+# --- Test / coverage ---
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Postgres / Docker local volumes ---
+pgdata/
+
+# --- Claude Code runtime ---
+.claude/scheduled_tasks.lock
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

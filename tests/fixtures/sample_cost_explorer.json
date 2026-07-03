@@ -1,0 +1,4 @@
+{
+  "_comment": "Placeholder canned AWS Cost Explorer GetCostAndUsage response. Real fixtures land in build step 2, captured from a validated console-matched pull and used to test AWS -> FOCUS normalization.",
+  "ResultsByTime": []
+}
