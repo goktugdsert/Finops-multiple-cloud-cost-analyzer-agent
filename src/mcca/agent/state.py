@@ -1,14 +1,13 @@
-"""Agent graph state. Fleshed out in build step 4."""
+"""Agent graph state: the running message list, with LangGraph's reducer."""
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, TypedDict
+
+from langgraph.graph.message import add_messages
 
 
-class AgentState(TypedDict, total=False):
-    """State threaded through the LangGraph graph."""
+class AgentState(TypedDict):
+    """State threaded through the graph. `add_messages` appends across nodes."""
 
-    question: str
-    messages: list[Any]
-    # Figures returned to the user, each tagged with the query that produced it.
-    results: list[dict[str, Any]]
+    messages: Annotated[list, add_messages]

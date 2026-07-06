@@ -34,6 +34,24 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = Field(default=None)
     aws_secret_access_key: str | None = Field(default=None)
     aws_session_token: str | None = Field(default=None)
+    aws_billing_account_id: str | None = Field(
+        default=None,
+        description=(
+            "Payer/billing account id stamped onto FOCUS rows ingested via Cost "
+            "Explorer, which omits the account unless grouped by LINKED_ACCOUNT "
+            "(and CE allows only 2 group-by dimensions). Falls back to 'unknown'."
+        ),
+    )
+
+    # --- Agent LLM (reasoning/orchestration only — never a source of figures) ---
+    # Provider is swappable via config alone; the graph/tools are provider-agnostic.
+    # Options: "google" (free tier), "ollama" (free, local), "anthropic", "openai".
+    llm_provider: str = Field(default="google")
+    agent_model: str | None = Field(default=None)  # None -> provider's default model
+    anthropic_api_key: str | None = Field(default=None)
+    google_api_key: str | None = Field(default=None)
+    openai_api_key: str | None = Field(default=None)
+    ollama_base_url: str = Field(default="http://localhost:11434")
 
     # --- LangSmith (tracing wired in from day one) ---------------------------
     langsmith_tracing: bool = Field(default=False)

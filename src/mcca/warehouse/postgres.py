@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Engine, insert, select
+from sqlalchemy import Engine, Executable, insert, select
 
 from mcca.warehouse.engine import create_warehouse_engine
 from mcca.warehouse.models import FocusRecord
@@ -43,12 +43,6 @@ class PostgresRepository(WarehouseRepository):
             result = conn.execute(select(focus_costs))
             return [dict(row) for row in result.mappings()]
 
-    def run_named_query(
-        self, name: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        # The fixed query registry lands in build step 3. Until then this raises so no
-        # ad-hoc SQL path exists by accident.
-        raise NotImplementedError(
-            "Named query registry not built yet (build step 3). "
-            "Cost figures must come from a registered, validated query."
-        )
+    def execute(self, statement: Executable) -> list[dict[str, Any]]:
+        with self._engine.connect() as conn:
+            return [dict(row) for row in conn.execute(statement).mappings()]

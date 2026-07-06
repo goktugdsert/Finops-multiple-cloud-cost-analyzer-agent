@@ -34,6 +34,9 @@ htmlcov/
 # --- Postgres / Docker local volumes ---
 pgdata/
 
+# --- Generated artifacts ---
+/report.html
+
 # --- Claude Code runtime ---
 .claude/scheduled_tasks.lock
 

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcca.warehouse.models import FocusRecord
+
+if TYPE_CHECKING:
+    from sqlalchemy import Executable
 
 
 class WarehouseRepository(ABC):
@@ -33,11 +36,11 @@ class WarehouseRepository(ABC):
         """
 
     @abstractmethod
-    def run_named_query(
-        self, name: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        """Execute a pre-registered, validated query by name and return rows.
+    def execute(self, statement: Executable) -> list[dict[str, Any]]:
+        """Execute a prepared SQLAlchemy Core statement and return mapped rows.
 
-        This is the ONLY sanctioned path for producing cost figures. `name` must refer
-        to a query in the fixed registry; arbitrary/LLM-authored SQL is not accepted.
+        The query LAYER (mcca.queries) decides which statements exist — a fixed,
+        validated set built from the schema, never arbitrary/LLM-authored SQL. The
+        repository just runs what it is handed. There is no string-SQL entry point, so
+        the agent cannot produce a figure outside the registered query set.
         """

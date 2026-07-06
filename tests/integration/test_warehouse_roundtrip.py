@@ -52,8 +52,15 @@ def test_insert_and_read_back(repo: PostgresRepository, sample_record: FocusReco
     assert row["x_owner"] == UNATTRIBUTED
 
 
-def test_named_query_path_is_locked(repo: PostgresRepository) -> None:
-    # No ad-hoc SQL path exists yet: the only figure path is the (not-yet-built)
-    # validated query registry.
-    with pytest.raises(NotImplementedError):
-        repo.run_named_query("spend_by_service")
+def test_execute_runs_registered_query(
+    repo: PostgresRepository, sample_record: FocusRecord
+) -> None:
+    # The only figure path is a registered, validated query executed via repo.execute.
+    from datetime import date
+
+    from mcca.queries.registry import run_query
+
+    repo.insert_records([sample_record])
+    result = run_query(repo, "total_spend", {"start": date(2026, 6, 1), "end": date(2026, 6, 2)})
+    assert result.name == "total_spend"
+    assert result.rows[0]["billed_cost"] == sample_record.billed_cost

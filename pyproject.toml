@@ -18,15 +18,28 @@ dependencies = [
     "pydantic-settings>=2.3",
     # AWS ingestion (read-only)
     "boto3>=1.34",
+    # Forecasting (predictive budgeting pillar)
+    "statsmodels>=0.14",
+    "pandas>=2.0",
     # Agent orchestration + tracing (wired in from day one)
     "langgraph>=0.2",
     "langchain-core>=0.3",
     "langsmith>=0.1",
+    # LLM providers (swappable via MCCA_LLM_PROVIDER). Free: google, ollama.
+    "langchain-google-genai>=2.0",
+    "langchain-ollama>=0.2",
+    "langchain-anthropic>=0.3",
 ]
 
 [project.scripts]
 # Placeholder CLI entry point; the runner is a stub this session.
 mcca = "mcca.__main__:main"
+# Seed the warehouse with synthetic AWS cost history (demo, no AWS account needed).
+mcca-seed = "mcca.ingestion.synthetic.seed:main"
+# Generate a self-contained HTML cost report.
+mcca-report = "mcca.surface.report:main"
+# Run the curated agent eval set.
+mcca-eval = "mcca.eval.runner:main"
 
 [dependency-groups]
 dev = [

@@ -1,4 +1,54 @@
 {
-  "_comment": "Placeholder canned AWS Cost Explorer GetCostAndUsage response. Real fixtures land in build step 2, captured from a validated console-matched pull and used to test AWS -> FOCUS normalization.",
-  "ResultsByTime": []
+  "_comment": "Captured shape of an AWS Cost Explorer GetCostAndUsage response (single page), DAILY granularity, grouped by SERVICE + RECORD_TYPE. Amounts are illustrative. Used to test AWS -> FOCUS normalization without live AWS. Replace with a console-validated capture during real integration.",
+  "TimePeriod": {"Start": "2026-06-01", "End": "2026-06-02"},
+  "ResultsByTime": [
+    {
+      "TimePeriod": {"Start": "2026-06-01", "End": "2026-06-02"},
+      "Total": {},
+      "Groups": [
+        {
+          "Keys": ["Amazon Elastic Compute Cloud - Compute", "Usage"],
+          "Metrics": {
+            "UnblendedCost": {"Amount": "120.5000000000", "Unit": "USD"},
+            "NetUnblendedCost": {"Amount": "100.0000000000", "Unit": "USD"},
+            "AmortizedCost": {"Amount": "110.0000000000", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "90.0000000000", "Unit": "USD"},
+            "UsageQuantity": {"Amount": "744.0000000000", "Unit": "Hrs"}
+          }
+        },
+        {
+          "Keys": ["Amazon Simple Storage Service", "Usage"],
+          "Metrics": {
+            "UnblendedCost": {"Amount": "23.4500000000", "Unit": "USD"},
+            "NetUnblendedCost": {"Amount": "23.4500000000", "Unit": "USD"},
+            "AmortizedCost": {"Amount": "23.4500000000", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "23.4500000000", "Unit": "USD"},
+            "UsageQuantity": {"Amount": "1024.0000000000", "Unit": "GB-Mo"}
+          }
+        },
+        {
+          "Keys": ["Amazon Elastic Compute Cloud - Compute", "Credit"],
+          "Metrics": {
+            "UnblendedCost": {"Amount": "0.0000000000", "Unit": "USD"},
+            "NetUnblendedCost": {"Amount": "-15.0000000000", "Unit": "USD"},
+            "AmortizedCost": {"Amount": "0.0000000000", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "-15.0000000000", "Unit": "USD"},
+            "UsageQuantity": {"Amount": "0.0000000000", "Unit": "N/A"}
+          }
+        },
+        {
+          "Keys": ["Tax", "Tax"],
+          "Metrics": {
+            "UnblendedCost": {"Amount": "9.9900000000", "Unit": "USD"},
+            "NetUnblendedCost": {"Amount": "9.9900000000", "Unit": "USD"},
+            "AmortizedCost": {"Amount": "9.9900000000", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "9.9900000000", "Unit": "USD"},
+            "UsageQuantity": {"Amount": "0.0000000000", "Unit": "N/A"}
+          }
+        }
+      ],
+      "Estimated": true
+    }
+  ],
+  "DimensionValueAttributes": []
 }

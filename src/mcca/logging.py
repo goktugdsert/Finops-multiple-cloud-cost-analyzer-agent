@@ -23,6 +23,10 @@ def configure_logging(settings: Settings | None = None) -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
+    # Quiet noisy HTTP/provider client logs so agent output stays readable.
+    for noisy in ("httpx", "httpcore", "google_genai", "urllib3", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     if settings.langsmith_tracing:
         os.environ["LANGSMITH_TRACING"] = "true"
         os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
