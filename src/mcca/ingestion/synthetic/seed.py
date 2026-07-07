@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 
+from mcca.budgets.store import upsert_budget
 from mcca.config import get_settings
 from mcca.ingestion.aws.loader import ingest_cost_and_usage
+from mcca.ingestion.azure.loader import ingest_cost_management
+from mcca.ingestion.gcp.loader import ingest_billing_export
+from mcca.ingestion.synthetic.azure import SyntheticAzureClient
 from mcca.ingestion.synthetic.client import SyntheticCostExplorerClient
+from mcca.ingestion.synthetic.gcp import SyntheticBigQueryClient
 from mcca.ingestion.synthetic.generator import GeneratorConfig
 from mcca.logging import configure_logging
 from mcca.warehouse.postgres import PostgresRepository
@@ -41,9 +47,33 @@ def seed_warehouse(
     *,
     config: GeneratorConfig | None = None,
 ) -> int:
-    """Generate [start, end) of synthetic cost data and load it via the repository."""
+    """Generate [start, end) of synthetic AWS cost data and load it via the repository."""
     client = SyntheticCostExplorerClient(config)
     return ingest_cost_and_usage(repo, start, end, client=client)
+
+
+def seed_azure_warehouse(
+    repo: WarehouseRepository,
+    start: date,
+    end: date,
+    *,
+    config: GeneratorConfig | None = None,
+) -> int:
+    """Generate [start, end) of synthetic Azure cost data and load it via the repository."""
+    client = SyntheticAzureClient(config)
+    return ingest_cost_management(repo, start, end, client=client)
+
+
+def seed_gcp_warehouse(
+    repo: WarehouseRepository,
+    start: date,
+    end: date,
+    *,
+    config: GeneratorConfig | None = None,
+) -> int:
+    """Generate [start, end) of synthetic GCP cost data and load it via the repository."""
+    client = SyntheticBigQueryClient(config)
+    return ingest_billing_export(repo, start, end, client=client)
 
 
 def main() -> None:
@@ -51,6 +81,18 @@ def main() -> None:
     parser.add_argument("--months", type=int, default=9, help="Months of history (default 9).")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility.")
     parser.add_argument("--keep", action="store_true", help="Append instead of resetting.")
+    parser.add_argument(
+        "--cloud",
+        choices=["aws", "azure", "gcp", "all"],
+        default="all",
+        help="Which cloud(s) to seed (default all).",
+    )
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=9000.0,
+        help="Monthly total budget to set for tracking (default 9000).",
+    )
     args = parser.parse_args()
 
     configure_logging()
@@ -67,15 +109,35 @@ def main() -> None:
         with repo.engine.begin() as conn:
             conn.execute(delete(focus_costs))
 
-    written = seed_warehouse(repo, start, end, config=GeneratorConfig(seed=args.seed))
+    cfg = GeneratorConfig(seed=args.seed)
+    written = 0
+    if args.cloud in ("aws", "all"):
+        n = seed_warehouse(repo, start, end, config=cfg)
+        written += n
+        print(f"Seeded {n} AWS rows.")
+    if args.cloud in ("azure", "all"):
+        n = seed_azure_warehouse(repo, start, end, config=cfg)
+        written += n
+        print(f"Seeded {n} Azure rows.")
+    if args.cloud in ("gcp", "all"):
+        n = seed_gcp_warehouse(repo, start, end, config=cfg)
+        written += n
+        print(f"Seeded {n} GCP rows.")
+    upsert_budget(repo, Decimal(str(args.budget)))
 
     with repo.engine.connect() as conn:
         total_billed = conn.execute(select(func.sum(focus_costs.c.billed_cost))).scalar_one()
-        total_effective = conn.execute(select(func.sum(focus_costs.c.effective_cost))).scalar_one()
+        by_provider = conn.execute(
+            select(focus_costs.c.provider_name, func.sum(focus_costs.c.billed_cost))
+            .group_by(focus_costs.c.provider_name)
+            .order_by(func.sum(focus_costs.c.billed_cost).desc())
+        ).all()
 
-    print(f"Seeded {written} rows from {start} to {end} (exclusive).")
-    print(f"Total billed (NetUnblended):   ${total_billed:,.2f}")
-    print(f"Total effective (NetAmortized): ${total_effective:,.2f}")
+    print(f"\nSeeded {written} rows total from {start} to {end} (exclusive).")
+    for provider, billed in by_provider:
+        print(f"  {provider:<8} ${billed:,.2f}")
+    print(f"Total billed:      ${total_billed:,.2f}")
+    print(f"Monthly budget:    ${args.budget:,.2f} (total)")
 
 
 if __name__ == "__main__":

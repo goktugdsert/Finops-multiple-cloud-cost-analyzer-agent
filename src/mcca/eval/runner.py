@@ -37,13 +37,15 @@ def grade_case(case: EvalCase, messages: list[Any]) -> EvalResult:
     return EvalResult(case.name, True, called, expected, "ok")
 
 
-def run_eval(graph: Any, cases: list[EvalCase] | None = None) -> list[EvalResult]:
+def run_eval(
+    graph: Any, cases: list[EvalCase] | None = None, *, config: dict[str, Any] | None = None
+) -> list[EvalResult]:
     """Invoke the agent on each case and grade the resulting message trace."""
     cases = cases if cases is not None else EVAL_CASES
     results: list[EvalResult] = []
     for case in cases:
         try:
-            out = graph.invoke({"messages": [HumanMessage(content=case.question)]})
+            out = graph.invoke({"messages": [HumanMessage(content=case.question)]}, config=config)
             results.append(grade_case(case, out["messages"]))
         except Exception as exc:  # noqa: BLE001 - a failed run is a failed case
             results.append(EvalResult(case.name, False, [], sorted(case.expected_tools), str(exc)))
@@ -59,13 +61,15 @@ def main() -> None:
     from mcca.agent.model import build_model
     from mcca.config import get_settings
     from mcca.logging import configure_logging
+    from mcca.tracing import flush_tracing, tracing_config
     from mcca.warehouse.postgres import PostgresRepository
 
     configure_logging()
     settings = get_settings()
     graph = build_agent_graph(PostgresRepository(), build_model(settings))
 
-    results = run_eval(graph)
+    results = run_eval(graph, config=tracing_config(settings))
+    flush_tracing(settings)
     passed, total = summarize(results)
     print(f"\nAgent eval — provider={settings.llm_provider}  model={settings.agent_model}\n")
     for r in results:

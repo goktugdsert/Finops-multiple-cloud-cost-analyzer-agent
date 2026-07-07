@@ -43,6 +43,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Azure (read-only, least-privilege) ----------------------------------
+    azure_billing_account_id: str | None = Field(default=None)
+    azure_subscription_id: str | None = Field(default=None)
+    azure_tenant_id: str | None = Field(default=None)
+
+    # --- GCP (read-only; BigQuery billing export) ----------------------------
+    gcp_billing_account_id: str | None = Field(default=None)
+    gcp_project_id: str | None = Field(default=None)
+
     # --- Agent LLM (reasoning/orchestration only — never a source of figures) ---
     # Provider is swappable via config alone; the graph/tools are provider-agnostic.
     # Options: "google" (free tier), "ollama" (free, local), "anthropic", "openai".
@@ -53,11 +62,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None)
     ollama_base_url: str = Field(default="http://localhost:11434")
 
-    # --- LangSmith (tracing wired in from day one) ---------------------------
-    langsmith_tracing: bool = Field(default=False)
-    langsmith_project: str = Field(default="mcca-agent")
-    langsmith_api_key: str | None = Field(default=None)
-    langsmith_endpoint: str | None = Field(default=None)
+    # --- Langfuse (LLM tracing/observability; free cloud tier or self-hosted) --
+    langfuse_enabled: bool = Field(default=False)
+    langfuse_public_key: str | None = Field(default=None)
+    langfuse_secret_key: str | None = Field(default=None)
+    langfuse_host: str = Field(default="https://cloud.langfuse.com")
 
     # --- App -----------------------------------------------------------------
     log_level: str = Field(default="INFO")

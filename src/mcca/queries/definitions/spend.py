@@ -32,6 +32,16 @@ def _build_spend_by_service(params: dict[str, Any]) -> Select:
     return stmt
 
 
+def _build_spend_by_provider(params: dict[str, Any]) -> Select:
+    amount = func.sum(metric_col(params)).label("amount")
+    return (
+        select(focus_costs.c.provider_name.label("provider_name"), amount)
+        .where(in_range(params))
+        .group_by(focus_costs.c.provider_name)
+        .order_by(amount.desc())
+    )
+
+
 def _build_spend_by_charge_category(params: dict[str, Any]) -> Select:
     amount = func.sum(metric_col(params)).label("amount")
     return (
@@ -57,6 +67,17 @@ def _build_monthly_spend(params: dict[str, Any]) -> Select:
     return select(month, amount).where(in_range(params)).group_by(month).order_by(month)
 
 
+def _build_daily_spend_by_service(params: dict[str, Any]) -> Select:
+    day = func.date(focus_costs.c.charge_period_start).label("day")
+    amount = func.sum(metric_col(params)).label("amount")
+    stmt = select(day, focus_costs.c.service_name.label("service_name"), amount).where(
+        in_range(params)
+    )
+    if params.get("charge_category"):
+        stmt = stmt.where(focus_costs.c.charge_category == params["charge_category"])
+    return stmt.group_by(day, focus_costs.c.service_name).order_by(day, focus_costs.c.service_name)
+
+
 register(
     QueryDefinition(
         "total_spend",
@@ -71,6 +92,14 @@ register(
         "Spend grouped by AWS service over a date range, highest first.",
         (_START, _END, metric_param(), QueryParam("charge_category"), QueryParam("limit")),
         _build_spend_by_service,
+    )
+)
+register(
+    QueryDefinition(
+        "spend_by_provider",
+        "Spend grouped by cloud provider (AWS/Azure/GCP) over a date range.",
+        (_START, _END, metric_param()),
+        _build_spend_by_provider,
     )
 )
 register(
@@ -95,5 +124,58 @@ register(
         "Spend per calendar month over a date range.",
         (_START, _END, metric_param()),
         _build_monthly_spend,
+    )
+)
+register(
+    QueryDefinition(
+        "daily_spend_by_service",
+        "Daily spend per service (internal; powers anomaly/waste detection).",
+        (_START, _END, metric_param(), QueryParam("charge_category")),
+        _build_daily_spend_by_service,
+        agent_facing=False,
+    )
+)
+
+
+def _build_charge_date_bounds(params: dict[str, Any]) -> Select:
+    return select(
+        func.min(func.date(focus_costs.c.charge_period_start)).label("min_day"),
+        func.max(func.date(focus_costs.c.charge_period_start)).label("max_day"),
+    )
+
+
+register(
+    QueryDefinition(
+        "charge_date_bounds",
+        "Earliest and latest charge dates present (internal; used for budget tracking).",
+        (),
+        _build_charge_date_bounds,
+        agent_facing=False,
+    )
+)
+
+
+def _build_service_owners(params: dict[str, Any]) -> Select:
+    billed = func.sum(metric_col(params)).label("billed")
+    stmt = select(
+        focus_costs.c.service_name.label("service_name"),
+        focus_costs.c.x_team.label("x_team"),
+        focus_costs.c.x_owner.label("x_owner"),
+        billed,
+    ).where(in_range(params))
+    if params.get("charge_category"):
+        stmt = stmt.where(focus_costs.c.charge_category == params["charge_category"])
+    return stmt.group_by(
+        focus_costs.c.service_name, focus_costs.c.x_team, focus_costs.c.x_owner
+    ).order_by(billed.desc())
+
+
+register(
+    QueryDefinition(
+        "service_owners",
+        "Team/owner attribution per service (internal; used to route findings).",
+        (_START, _END, metric_param(), QueryParam("charge_category")),
+        _build_service_owners,
+        agent_facing=False,
     )
 )

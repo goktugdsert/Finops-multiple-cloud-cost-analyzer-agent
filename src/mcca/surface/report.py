@@ -12,10 +12,14 @@ from datetime import UTC, date, datetime
 from html import escape
 from typing import Any
 
+from mcca.analysis.drivers import explain_change
+from mcca.budgets.service import spend_vs_budget
 from mcca.config import get_settings
+from mcca.detection.service import detect
 from mcca.forecasting.service import forecast_daily_spend
 from mcca.logging import configure_logging
 from mcca.queries.registry import run_query
+from mcca.routing.router import route
 from mcca.warehouse.postgres import PostgresRepository
 
 
@@ -38,6 +42,18 @@ def build_report_data(
     ).rows
     mom = run_query(repo, "month_over_month", window).rows
     forecast = forecast_daily_spend(repo, start, end, horizon=horizon)
+    detection = detect(repo, start, end)
+    # Project the current month (the month starting at `end`) against the budget.
+    bs = spend_vs_budget(repo, end)
+    teams = run_query(repo, "spend_by_team", window).rows
+    # Explain the last full month vs the calendar month before it.
+    last_month = _minus_months(end, 1)
+    prior_month = _minus_months(end, 2)
+    drivers = explain_change(
+        repo, last_month, end, prior_start=prior_month, prior_end=last_month, top_n=5
+    )
+    routing = route(repo, start, end, budget_month=end)
+    providers = run_query(repo, "spend_by_provider", window).rows
 
     billed, effective = _f(total["billed_cost"]), _f(total["effective_cost"])
     return {
@@ -48,6 +64,16 @@ def build_report_data(
         "total_effective": effective,
         "savings": billed - effective,
         "services": [{"name": r["service_name"], "amount": _f(r["amount"])} for r in services],
+        "providers": [{"name": r["provider_name"], "amount": _f(r["amount"])} for r in providers],
+        "teams": [{"name": r["x_team"], "amount": _f(r["amount"])} for r in teams],
+        "drivers": {
+            "period": last_month.strftime("%b %Y"),
+            "total_delta": _f(drivers.total_delta),
+            "items": [
+                {"service": d.service, "delta": _f(d.delta), "current": _f(d.current)}
+                for d in drivers.drivers
+            ],
+        },
         "months": [
             {
                 "label": r["month"].strftime("%b %Y"),
@@ -64,6 +90,45 @@ def build_report_data(
             "lo": sum(_f(p.lower) for p in forecast.points),
             "hi": sum(_f(p.upper) for p in forecast.points),
         },
+        "budget": None
+        if bs is None
+        else {
+            "month": bs.month.strftime("%b %Y"),
+            "status": bs.status,
+            "budget": _f(bs.budget_amount),
+            "actual": _f(bs.actual),
+            "projected": _f(bs.projected),
+            "projected_lo": _f(bs.projected_lo),
+            "projected_hi": _f(bs.projected_hi),
+            "variance": _f(bs.variance),
+            "variance_pct": round(bs.variance_pct, 1),
+        },
+        "anomalies": {
+            "spikes": [
+                {
+                    "date": s.date.isoformat(),
+                    "service": s.service,
+                    "amount": _f(s.amount),
+                    "ratio": round(s.ratio, 1),
+                }
+                for s in detection.spikes[:5]
+            ],
+            "steady": [
+                {"service": c.service, "monthly_estimate": _f(c.monthly_estimate)}
+                for c in detection.steady_costs[:5]
+            ],
+        },
+        "findings": [
+            {
+                "kind": f.kind,
+                "severity": f.severity,
+                "owner": f.owner,
+                "team": f.team,
+                "summary": f.summary,
+                "recommendation": f.recommendation,
+            }
+            for f in routing.findings[:6]
+        ],
     }
 
 
@@ -145,6 +210,9 @@ th,td{text-align:right;padding:6px 8px;border-bottom:1px solid #eaeef2}
 th:first-child,td:first-child{text-align:left}
 .up{color:#cf222e}.down{color:#1a7f37}
 .foot{color:#8b949e;font-size:11px;margin-top:8px}
+.badge{font-size:11px;padding:2px 9px;border-radius:11px;margin-left:8px;font-weight:600}
+.bover{background:#ffe3e3;color:#cf222e}.brisk{background:#fff3cd;color:#b45309}
+.bok{background:#dafbe1;color:#1a7f37}
 """
 
 
@@ -189,24 +257,151 @@ def render_html(data: dict[str, Any]) -> str:
         )
     mom_table = "".join(rows)
 
+    budget = data.get("budget")
+    if budget:
+        badge_cls = {"OVER": "bover", "AT_RISK": "brisk", "ON_TRACK": "bok"}.get(
+            budget["status"], "bok"
+        )
+        label = {"OVER": "Over budget", "AT_RISK": "At risk", "ON_TRACK": "On track"}.get(
+            budget["status"], budget["status"]
+        )
+        budget_panel = (
+            f"<div class='panel'><h2>Budget — {escape(budget['month'])} "
+            f"<span class='badge {badge_cls}'>{escape(label)}</span></h2><div class='cards'>"
+            f"<div class='card'><div class='k'>Monthly budget</div>"
+            f"<div class='v'>{_money(budget['budget'])}</div></div>"
+            f"<div class='card'><div class='k'>Actual so far</div>"
+            f"<div class='v'>{_money(budget['actual'])}</div></div>"
+            f"<div class='card'><div class='k'>Projected month-end</div>"
+            f"<div class='v'>{_money(budget['projected'])}</div>"
+            f"<div class='n'>range {_money(budget['projected_lo'])}–"
+            f"{_money(budget['projected_hi'])}</div></div>"
+            f"<div class='card'><div class='k'>Variance</div>"
+            f"<div class='v'>{_money(budget['variance'])}</div>"
+            f"<div class='n'>{budget['variance_pct']:+.1f}% vs budget</div></div>"
+            "</div></div>"
+        )
+    else:
+        budget_panel = ""
+
+    findings = data.get("findings", [])
+    if findings:
+        sev_cls = {"HIGH": "bover", "MEDIUM": "brisk", "LOW": "bok"}
+        finding_rows = "".join(
+            f"<tr><td><span class='badge {sev_cls.get(f['severity'], 'bok')}'>"
+            f"{escape(f['severity'])}</span></td>"
+            f"<td>{escape(f['summary'])}<div class='foot' style='margin:3px 0 0'>&rarr; "
+            f"{escape(f['recommendation'])}</div></td>"
+            f"<td>{escape(f['owner'])}<br><span class='foot'>{escape(f['team'])}</span></td></tr>"
+            for f in findings
+        )
+        findings_panel = (
+            f"<div class='panel'><h2>Recommended actions ({len(findings)})</h2>"
+            "<table><thead><tr><th>Severity</th><th>Finding &amp; recommendation</th>"
+            f"<th>Owner</th></tr></thead><tbody>{finding_rows}</tbody></table>"
+            "<div class='foot'>Recommend-only — a human approves; nothing is executed.</div></div>"
+        )
+    else:
+        findings_panel = ""
+
+    anomalies = data.get("anomalies", {"spikes": [], "steady": []})
+    spike_rows = (
+        "".join(
+            f"<tr><td>{escape(s['date'])}</td><td>{escape(s['service'])}</td>"
+            f"<td>{_money(s['amount'])}</td><td>{s['ratio']:.1f}×</td></tr>"
+            for s in anomalies["spikes"]
+        )
+        or "<tr><td colspan='4'>No spikes detected.</td></tr>"
+    )
+    steady_rows = (
+        "".join(
+            f"<tr><td>{escape(c['service'])}</td><td>{_money(c['monthly_estimate'])}/mo</td></tr>"
+            for c in anomalies["steady"]
+        )
+        or "<tr><td colspan='2'>None flagged.</td></tr>"
+    )
+    anomaly_panel = (
+        "<div class='panel'><h2>Detected anomalies</h2>"
+        "<table><thead><tr><th>Spike date</th><th>Service</th><th>Cost</th>"
+        f"<th>vs baseline</th></tr></thead><tbody>{spike_rows}</tbody></table>"
+        "<div class='foot' style='margin:12px 0 6px'>Steady structural spend "
+        "(flat &amp; persistent — review for waste):</div>"
+        "<table><thead><tr><th>Service</th><th>Est. monthly</th></tr></thead>"
+        f"<tbody>{steady_rows}</tbody></table></div>"
+    )
+
+    teams = data.get("teams", [])
+    max_team = max((t["amount"] for t in teams), default=1.0) or 1.0
+    team_bars = "".join(
+        f'<div class="bar-row"><div class="name">{escape(t["name"])}</div>'
+        f'<div class="bar"><span style="width:{t["amount"] / max_team * 100:.1f}%"></span></div>'
+        f'<div class="amt">{_money(t["amount"])}</div></div>'
+        for t in teams
+    )
+    team_panel = (
+        f"<div class='panel'><h2>Spend by team (attribution)</h2>{team_bars}"
+        "<div class='foot'>Untagged spend shows honestly as 'unattributed'.</div></div>"
+        if teams
+        else ""
+    )
+
+    drv = data.get("drivers")
+    if drv and drv["items"]:
+        driver_rows = "".join(
+            f"<tr><td>{escape(d['service'])}</td><td>{_money(d['current'])}</td>"
+            f"<td class='{'up' if d['delta'] > 0 else 'down'}'>"
+            f"{'+' if d['delta'] >= 0 else '−'}${abs(d['delta']):,.2f}</td></tr>"
+            for d in drv["items"]
+        )
+        sign = "+" if drv["total_delta"] >= 0 else "−"
+        drivers_panel = (
+            f"<div class='panel'><h2>What changed — {escape(drv['period'])} "
+            f"({sign}${abs(drv['total_delta']):,.2f} vs prior month)</h2>"
+            "<table><thead><tr><th>Service</th><th>This month</th><th>Δ vs prior</th></tr>"
+            f"</thead><tbody>{driver_rows}</tbody></table></div>"
+        )
+    else:
+        drivers_panel = ""
+
+    providers = data.get("providers", [])
+    provider_label = " + ".join(p["name"] for p in providers) or "AWS"
+    max_prov = max((p["amount"] for p in providers), default=1.0) or 1.0
+    provider_bars = "".join(
+        f'<div class="bar-row"><div class="name">{escape(p["name"])}</div>'
+        f'<div class="bar"><span style="width:{p["amount"] / max_prov * 100:.1f}%"></span></div>'
+        f'<div class="amt">{_money(p["amount"])}</div></div>'
+        for p in providers
+    )
+    provider_panel = (
+        f"<div class='panel'><h2>Spend by cloud provider</h2>{provider_bars}</div>"
+        if len(providers) > 1
+        else ""
+    )
+
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Cloud Cost Report</title><style>{_CSS}</style></head><body><div class='wrap'>"
         "<h1>Multi-Cloud Cost Report</h1>"
-        f"<div class='sub'>AWS • {escape(data['start'])} to {escape(data['end'])} "
-        f"• generated {escape(data['generated'])}</div>"
+        f"<div class='sub'>{escape(provider_label)} • {escape(data['start'])} to "
+        f"{escape(data['end'])} • generated {escape(data['generated'])}</div>"
         f"<div class='cards'>{card_html}</div>"
+        f"{provider_panel}"
+        f"{budget_panel}"
+        f"{findings_panel}"
         f"<div class='panel'><h2>Monthly trend &amp; forecast</h2>"
         f"{_svg_trend(data['months'], fc)}"
         f"<div class='foot'>Forecast model: {escape(fc['model'])} · orange whisker = "
         f"{int(fc['interval'] * 100)}% prediction interval</div></div>"
         f"<div class='panel'><h2>Top services by usage cost</h2>{bars}</div>"
+        f"{team_panel}"
         f"<div class='panel'><h2>Month over month</h2>"
         f"<table><thead><tr><th>Month</th><th>Billed</th><th>Δ vs prior</th></tr></thead>"
         f"<tbody>{mom_table}</tbody></table></div>"
-        "<div class='foot'>Every figure is produced by a validated query or the forecaster — "
-        "never by a language model.</div>"
+        f"{drivers_panel}"
+        f"{anomaly_panel}"
+        "<div class='foot'>Every figure is produced by a validated query, the forecaster, or "
+        "a deterministic detector — never by a language model.</div>"
         "</div></body></html>"
     )
 

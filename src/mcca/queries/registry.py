@@ -45,6 +45,9 @@ class QueryDefinition:
     description: str
     params: tuple[QueryParam, ...]
     build: Callable[[dict[str, Any]], Select]
+    # Internal queries (e.g. day x service, used to power detection) are not exposed as
+    # agent tools — their result sets are too large/granular for the LLM to consume.
+    agent_facing: bool = True
 
 
 @dataclass(frozen=True)

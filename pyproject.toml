@@ -21,10 +21,14 @@ dependencies = [
     # Forecasting (predictive budgeting pillar)
     "statsmodels>=0.14",
     "pandas>=2.0",
+    # Web chat UI (surface)
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
     # Agent orchestration + tracing (wired in from day one)
     "langgraph>=0.2",
     "langchain-core>=0.3",
-    "langsmith>=0.1",
+    "langchain>=0.3",  # required by the Langfuse LangChain integration
+    "langfuse>=2.0",
     # LLM providers (swappable via MCCA_LLM_PROVIDER). Free: google, ollama.
     "langchain-google-genai>=2.0",
     "langchain-ollama>=0.2",
@@ -38,6 +42,8 @@ mcca = "mcca.__main__:main"
 mcca-seed = "mcca.ingestion.synthetic.seed:main"
 # Generate a self-contained HTML cost report.
 mcca-report = "mcca.surface.report:main"
+# Serve the interactive web chat UI (report + ask-the-agent).
+mcca-web = "mcca.surface.web:main"
 # Run the curated agent eval set.
 mcca-eval = "mcca.eval.runner:main"
 

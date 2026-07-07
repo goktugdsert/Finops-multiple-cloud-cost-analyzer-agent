@@ -15,6 +15,9 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import Field, create_model
 
+from mcca.analysis.drivers import explain_change
+from mcca.budgets.service import spend_vs_budget
+from mcca.detection.service import detect
 from mcca.forecasting.service import forecast_daily_spend
 from mcca.queries.registry import (
     COST_METRICS,
@@ -22,6 +25,7 @@ from mcca.queries.registry import (
     list_queries,
     run_query,
 )
+from mcca.routing.router import route
 
 if False:  # typing-only; avoids importing the warehouse impl into the tools layer
     from mcca.warehouse.repository import WarehouseRepository
@@ -137,8 +141,194 @@ def _make_forecast_tool(repo: WarehouseRepository) -> BaseTool:
     )
 
 
+def _serialize_detection(report: Any) -> dict[str, Any]:
+    return {
+        "window": report.window,
+        "z": report.z,
+        "spikes": [
+            {
+                "date": s.date.isoformat(),
+                "service": s.service,
+                "amount": str(s.amount),
+                "baseline": str(s.baseline),
+                "ratio": round(s.ratio, 2),
+            }
+            for s in report.spikes
+        ],
+        "steady_costs": [
+            {
+                "service": c.service,
+                "mean_daily": str(c.mean_daily),
+                "monthly_estimate": str(c.monthly_estimate),
+                "cov": c.cov,
+            }
+            for c in report.steady_costs
+        ],
+    }
+
+
+def _detection_args() -> type:
+    return create_model(
+        "detect_anomalies_args",
+        start=(date, Field(..., description="Window start, ISO date YYYY-MM-DD.")),
+        end=(date, Field(..., description="Window end (exclusive), ISO date YYYY-MM-DD.")),
+        metric=(str | None, Field("billed_cost", description=f"One of {list(COST_METRICS)}.")),
+        window=(int | None, Field(14, description="Trailing baseline window in days.")),
+        z=(float | None, Field(3.0, description="Z-score threshold for a spike.")),
+    )
+
+
+def _make_detection_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        report = detect(
+            repo,
+            kwargs["start"],
+            kwargs["end"],
+            metric=kwargs.get("metric") or "billed_cost",
+            window=kwargs.get("window") or 14,
+            z=kwargs.get("z") or 3.0,
+        )
+        return _serialize_detection(report)
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="detect_anomalies",
+        description=(
+            "Detect cost anomalies over [start, end): spending SPIKES (days far above a "
+            "service's trailing baseline) and STEADY structural spend (flat, persistent "
+            "cost worth an efficiency review)."
+        ),
+        args_schema=_detection_args(),
+    )
+
+
+def _make_budget_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        status = spend_vs_budget(
+            repo, kwargs["month"], metric=kwargs.get("metric") or "billed_cost"
+        )
+        if status is None:
+            return {"status": "NO_BUDGET", "message": "No budget configured for this scope."}
+        return {
+            "month": status.month.isoformat(),
+            "scope": status.scope,
+            "status": status.status,
+            "budget_amount": str(status.budget_amount),
+            "actual_so_far": str(status.actual),
+            "forecast_remaining": str(status.forecast_mid),
+            "projected_month_end": str(status.projected),
+            "projected_range": [str(status.projected_lo), str(status.projected_hi)],
+            "variance": str(status.variance),
+            "variance_pct": round(status.variance_pct, 1),
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="spend_vs_budget",
+        description=(
+            "Track spend against the monthly budget for a given month: month-to-date "
+            "actuals plus a forecast of the rest of the month, projected against the "
+            "budget, with an ON_TRACK / AT_RISK / OVER status. Pass any date in the month."
+        ),
+        args_schema=create_model(
+            "spend_vs_budget_args",
+            month=(date, Field(..., description="Any date in the target month (YYYY-MM-DD).")),
+            metric=(str | None, Field("billed_cost", description=f"One of {list(COST_METRICS)}.")),
+        ),
+    )
+
+
+def _make_explain_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        exp = explain_change(
+            repo,
+            kwargs["start"],
+            kwargs["end"],
+            metric=kwargs.get("metric") or "billed_cost",
+            top_n=kwargs.get("top_n") or 5,
+        )
+        return {
+            "period": [exp.current_start.isoformat(), exp.current_end.isoformat()],
+            "prior_period": [exp.prior_start.isoformat(), exp.prior_end.isoformat()],
+            "current_total": str(exp.current_total),
+            "prior_total": str(exp.prior_total),
+            "total_delta": str(exp.total_delta),
+            "drivers": [
+                {
+                    "service": d.service,
+                    "current": str(d.current),
+                    "prior": str(d.prior),
+                    "delta": str(d.delta),
+                }
+                for d in exp.drivers
+            ],
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="explain_change",
+        description=(
+            "Explain why spend changed: decompose the change for [start, end) versus the "
+            "equal-length prior period into the per-service drivers that moved most."
+        ),
+        args_schema=create_model(
+            "explain_change_args",
+            start=(date, Field(..., description="Period start, ISO date YYYY-MM-DD.")),
+            end=(date, Field(..., description="Period end (exclusive), ISO date YYYY-MM-DD.")),
+            metric=(str | None, Field("billed_cost", description=f"One of {list(COST_METRICS)}.")),
+            top_n=(int | None, Field(5, description="How many top drivers to return.")),
+        ),
+    )
+
+
+def _make_routing_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        report = route(
+            repo, kwargs["start"], kwargs["end"], budget_month=kwargs.get("budget_month")
+        )
+        return {
+            "findings": [
+                {
+                    "kind": f.kind,
+                    "severity": f.severity,
+                    "service": f.service,
+                    "team": f.team,
+                    "owner": f.owner,
+                    "amount": str(f.amount),
+                    "summary": f.summary,
+                    "recommendation": f.recommendation,
+                }
+                for f in report.findings
+            ]
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="route_findings",
+        description=(
+            "Produce a prioritized list of cost findings (spikes, steady waste, budget "
+            "breaches) over [start, end), each routed to an owner with a RECOMMENDED "
+            "action. Read-only — recommends only, never executes. Pass budget_month to "
+            "include budget breaches."
+        ),
+        args_schema=create_model(
+            "route_findings_args",
+            start=(date, Field(..., description="Window start, ISO date YYYY-MM-DD.")),
+            end=(date, Field(..., description="Window end (exclusive), ISO date YYYY-MM-DD.")),
+            budget_month=(
+                date | None,
+                Field(None, description="Any date in the month to check against budget."),
+            ),
+        ),
+    )
+
+
 def get_cost_tools(repo: WarehouseRepository) -> list[BaseTool]:
-    """Build the agent's tools: one per registered query, plus the forecast tool."""
-    tools = [_make_tool(definition, repo) for definition in list_queries()]
+    """Build the agent's tools: queries + forecast + detection + budget + explain + route."""
+    tools = [_make_tool(d, repo) for d in list_queries() if d.agent_facing]
     tools.append(_make_forecast_tool(repo))
+    tools.append(_make_detection_tool(repo))
+    tools.append(_make_budget_tool(repo))
+    tools.append(_make_explain_tool(repo))
+    tools.append(_make_routing_tool(repo))
     return tools

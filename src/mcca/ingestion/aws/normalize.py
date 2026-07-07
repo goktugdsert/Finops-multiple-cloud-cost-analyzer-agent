@@ -13,9 +13,10 @@ Using the *Net* metrics means credits and refunds are already reflected in the h
 figures; credit/refund line items themselves also appear as their own rows (RECORD_TYPE
 Credit/Refund) with negative amounts, which is how Cost Explorer models them.
 
-Attribution (x_team/x_service/x_environment/x_owner) stays 'unattributed' in v1: mapping
-cloud tags to owners is a deferred allocation *policy*, and Cost Explorer's two-group-by
-limit is already spent on SERVICE + RECORD_TYPE. The columns exist and default honestly.
+Attribution: `attribution_from_tags` maps cost-allocation tags (team/service/environment/
+owner) onto the FOCUS x_* columns. Lines without a given tag keep the honest
+'unattributed' default — untagged spend is shown, never guessed. (Real per-resource tags
+come from the Cost & Usage Report; the synthetic provider emits them directly.)
 
 Numbers here originate from the deterministic Cost Explorer pull, never from an LLM.
 """
@@ -26,12 +27,14 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from mcca.ingestion.attribution import attribution_from_tags
 from mcca.ingestion.aws.cost_explorer import RawCostRow
 from mcca.warehouse.models import FocusRecord
 
 # Cost Explorer metrics chosen as the FOCUS headline measures.
 BILLED_METRIC = "NetUnblendedCost"
 EFFECTIVE_METRIC = "NetAmortizedCost"
+
 
 # AWS RECORD_TYPE dimension -> FOCUS ChargeCategory
 # (Usage | Purchase | Tax | Credit | Adjustment). Unknown types fall back to "Usage".
@@ -108,7 +111,9 @@ def normalize_row(row: RawCostRow, billing_account_id: str = "unknown") -> Focus
         service_name=row.groups.get("SERVICE"),
         consumed_quantity=_optional_amount(row.metrics, "UsageQuantity"),
         consumed_unit=row.metrics.get("UsageQuantity", {}).get("Unit"),
+        tags=row.tags or None,
         source_system="aws.cost_explorer",
+        **attribution_from_tags(row.tags),
     )
 
 

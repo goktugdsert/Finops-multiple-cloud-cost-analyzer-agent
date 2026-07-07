@@ -6,6 +6,12 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "python", "-m", "http.server", "8123"],
       "port": 8123
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "mcca-web"],
+      "port": 8000
     }
   ]
 }

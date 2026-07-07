@@ -26,6 +26,7 @@ from sqlalchemy import (
     Numeric,
     Table,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -108,4 +109,19 @@ focus_costs = Table(
     Index("ix_focus_costs_charge_period", "charge_period_start", "charge_period_end"),
     Index("ix_focus_costs_provider_service", "provider_name", "service_name"),
     Index("ix_focus_costs_attribution", "x_team", "x_environment"),
+)
+
+# Budgets are user-set monthly targets (not derived cost figures) that spend is tracked
+# against. Scoped so a budget can later apply to a service/team/environment; v1 uses
+# ('total', 'all'). One recurring monthly amount per scope.
+budgets = Table(
+    "budgets",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("scope_type", Text, nullable=False),  # total | service | team | environment
+    Column("scope_value", Text, nullable=False, server_default="all"),
+    Column("monthly_amount", Numeric(20, 10), nullable=False),
+    Column("currency", Text, nullable=False, server_default="USD"),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("scope_type", "scope_value", name="uq_budget_scope"),
 )

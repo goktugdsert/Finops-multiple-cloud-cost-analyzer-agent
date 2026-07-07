@@ -12,6 +12,7 @@ from mcca.tools.cost_tools import get_cost_tools
 EXPECTED_TOOL_NAMES = {
     "total_spend",
     "spend_by_service",
+    "spend_by_provider",
     "spend_by_charge_category",
     "daily_spend",
     "monthly_spend",
@@ -19,6 +20,10 @@ EXPECTED_TOOL_NAMES = {
     "spend_by_environment",
     "month_over_month",
     "forecast_spend",
+    "detect_anomalies",
+    "spend_vs_budget",
+    "explain_change",
+    "route_findings",
 }
 
 

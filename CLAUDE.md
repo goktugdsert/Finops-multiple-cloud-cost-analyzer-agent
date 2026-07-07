@@ -64,7 +64,8 @@ clouds (handle discounts, credits, amortization, blended vs unblended).
   Snowflake later without touching agent logic.
 - Schema: FOCUS (FinOps Open Cost & Usage Specification).
 - Forecasting: Prophet or statsmodels (ARIMA).
-- Tracing + eval: LangSmith.
+- Tracing + eval: Langfuse (free cloud tier or self-hosted; config-driven, off by
+  default). [Deviation from the original LangSmith choice, per project decision.]
 - Cloud #1: AWS (Cost & Usage Report + Cost Explorer + CloudWatch).
 
 ## Conventions

@@ -44,5 +44,11 @@ class PostgresRepository(WarehouseRepository):
             return [dict(row) for row in result.mappings()]
 
     def execute(self, statement: Executable) -> list[dict[str, Any]]:
-        with self._engine.connect() as conn:
-            return [dict(row) for row in conn.execute(statement).mappings()]
+        # begin() commits on success, so this serves both reads (queries) and the
+        # occasional write (e.g. upserting a budget). SELECTs return their rows;
+        # writes without a RETURNING clause return an empty list.
+        with self._engine.begin() as conn:
+            result = conn.execute(statement)
+            if result.returns_rows:
+                return [dict(row) for row in result.mappings()]
+            return []

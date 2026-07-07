@@ -17,6 +17,7 @@ from mcca.agent.graph import build_agent_graph
 from mcca.agent.model import build_model
 from mcca.config import get_settings
 from mcca.logging import configure_logging
+from mcca.tracing import flush_tracing, tracing_config
 from mcca.warehouse.postgres import PostgresRepository
 
 
@@ -34,8 +35,12 @@ def main() -> None:
     try:
         model = build_model(settings)
         graph = build_agent_graph(repo, model)
-        result = graph.invoke({"messages": [HumanMessage(content=question)]})
+        result = graph.invoke(
+            {"messages": [HumanMessage(content=question)]}, config=tracing_config(settings)
+        )
+        flush_tracing(settings)
     except Exception as exc:  # noqa: BLE001 - surface a friendly setup hint
+        flush_tracing(settings)  # still record the (errored) run in Langfuse
         print(f"Agent run failed: {exc}")
         print(
             f"Provider is MCCA_LLM_PROVIDER={settings.llm_provider!r}. Check its key/quota "

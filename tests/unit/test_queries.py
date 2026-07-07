@@ -22,9 +22,13 @@ from mcca.queries.registry import (
 EXPECTED_QUERIES = {
     "total_spend",
     "spend_by_service",
+    "spend_by_provider",
     "spend_by_charge_category",
     "daily_spend",
     "monthly_spend",
+    "daily_spend_by_service",
+    "charge_date_bounds",
+    "service_owners",
     "spend_by_team",
     "spend_by_environment",
     "month_over_month",
@@ -84,12 +88,20 @@ def test_iso_date_strings_are_coerced() -> None:
     assert resolved["end"] == date(2026, 2, 1)
 
 
-def test_builders_compile_to_aggregating_sql() -> None:
+def test_builders_compile_over_focus_costs() -> None:
     for defn in list_queries():
-        params = validate_params(defn, {"start": date(2026, 1, 1), "end": date(2026, 2, 1)})
+        # Supply only the params this query declares (some, like charge_date_bounds,
+        # take none).
+        supplied = {}
+        declared = {p.name for p in defn.params}
+        if "start" in declared:
+            supplied["start"] = date(2026, 1, 1)
+        if "end" in declared:
+            supplied["end"] = date(2026, 2, 1)
+        params = validate_params(defn, supplied)
         sql = str(defn.build(params).compile(compile_kwargs={"literal_binds": True})).lower()
         assert "focus_costs" in sql
-        assert "sum(" in sql
+        assert sql.strip().startswith("select")
 
 
 def test_run_query_carries_provenance() -> None:

@@ -87,6 +87,41 @@ def test_attribution_defaults_to_unattributed(rows: list[RawCostRow]) -> None:
         assert record.x_owner == UNATTRIBUTED
 
 
+def test_tags_populate_attribution_columns() -> None:
+    row = RawCostRow(
+        start="2026-06-01",
+        end="2026-06-02",
+        groups={"SERVICE": "Amazon EC2", "RECORD_TYPE": "Usage"},
+        metrics={
+            "NetUnblendedCost": {"Amount": "10.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "8.00", "Unit": "USD"},
+        },
+        estimated=False,
+        tags={"team": "platform", "environment": "prod", "owner": "alice"},
+    )
+    record = normalize_row(row)
+    assert record.x_team == "platform"
+    assert record.x_environment == "prod"
+    assert record.x_owner == "alice"
+    assert record.tags == {"team": "platform", "environment": "prod", "owner": "alice"}
+
+
+def test_untagged_line_stays_unattributed() -> None:
+    row = RawCostRow(
+        start="2026-06-01",
+        end="2026-06-02",
+        groups={"SERVICE": "Tax", "RECORD_TYPE": "Tax"},
+        metrics={
+            "NetUnblendedCost": {"Amount": "9.99", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "9.99", "Unit": "USD"},
+        },
+        estimated=False,
+    )
+    record = normalize_row(row)
+    assert record.x_team == UNATTRIBUTED
+    assert record.tags is None
+
+
 def test_billing_period_rolls_over_december() -> None:
     row = RawCostRow(
         start="2026-12-15",

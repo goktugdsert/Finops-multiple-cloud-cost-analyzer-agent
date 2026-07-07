@@ -40,6 +40,14 @@ class ServiceSpec:
     noise: float = 0.05  # relative gaussian jitter (std dev)
     taxable: bool = True
     steady_waste: bool = False  # flat: no growth/seasonality (structural waste)
+    # Cost-allocation tags emitted on usage lines (drive attribution). None = untagged.
+    team: str | None = None
+    environment: str | None = None
+    owner: str | None = None
+
+    def tags(self) -> dict[str, str]:
+        pairs = {"team": self.team, "environment": self.environment, "owner": self.owner}
+        return {k: v for k, v in pairs.items() if v}
 
 
 # Approximate AWS us-east-1 on-demand prices. Base usage is sized so a typical month
@@ -54,6 +62,9 @@ SERVICES: list[ServiceSpec] = [
         growth_per_month=0.04,
         weekend_factor=0.65,
         noise=0.06,
+        team="platform",
+        environment="prod",
+        owner="alice",
     ),
     ServiceSpec(
         "Amazon Simple Storage Service",
@@ -62,6 +73,9 @@ SERVICES: list[ServiceSpec] = [
         base_units=723,
         growth_per_month=0.05,
         noise=0.03,
+        team="platform",
+        environment="prod",
+        owner="alice",
     ),
     ServiceSpec(
         "Amazon Relational Database Service",
@@ -72,6 +86,9 @@ SERVICES: list[ServiceSpec] = [
         growth_per_month=0.03,
         weekend_factor=0.9,
         noise=0.05,
+        team="data",
+        environment="prod",
+        owner="bob",
     ),
     ServiceSpec(
         "AWS Lambda",
@@ -81,6 +98,9 @@ SERVICES: list[ServiceSpec] = [
         growth_per_month=0.06,
         weekend_factor=0.7,
         noise=0.08,
+        team="data",
+        environment="staging",
+        owner="carol",
     ),
     ServiceSpec(
         "AWS Data Transfer",
@@ -90,6 +110,9 @@ SERVICES: list[ServiceSpec] = [
         growth_per_month=0.04,
         weekend_factor=0.75,
         noise=0.10,
+        team="platform",
+        environment="prod",
+        owner="alice",
     ),
     ServiceSpec(
         "AmazonCloudWatch",
@@ -98,6 +121,9 @@ SERVICES: list[ServiceSpec] = [
         base_units=50,
         growth_per_month=0.03,
         noise=0.05,
+        team="platform",
+        environment="prod",
+        owner="alice",
     ),
     ServiceSpec(
         "Amazon DynamoDB",
@@ -107,6 +133,9 @@ SERVICES: list[ServiceSpec] = [
         growth_per_month=0.05,
         weekend_factor=0.8,
         noise=0.07,
+        team="data",
+        environment="prod",
+        owner="bob",
     ),
     # Deliberately flat = unattached EBS volumes left running: steady structural waste.
     ServiceSpec(
@@ -156,8 +185,13 @@ def _metrics(
     }
 
 
-def _group(keys: list[str], metrics: dict[str, dict[str, str]]) -> dict[str, Any]:
-    return {"Keys": keys, "Metrics": metrics}
+def _group(
+    keys: list[str], metrics: dict[str, dict[str, str]], tags: dict[str, str] | None = None
+) -> dict[str, Any]:
+    group: dict[str, Any] = {"Keys": keys, "Metrics": metrics}
+    if tags:
+        group["Tags"] = tags
+    return group
 
 
 def _daily_usage(spec: ServiceSpec, day_index: int, day: date, config: GeneratorConfig) -> float:
@@ -199,7 +233,11 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
             unblended = spec.rate * usage
             amortized = unblended * Decimal(str(1 - spec.ri_savings))
             groups.append(
-                _group([spec.key, "Usage"], _metrics(unblended, amortized, usage, spec.unit))
+                _group(
+                    [spec.key, "Usage"],
+                    _metrics(unblended, amortized, usage, spec.unit),
+                    tags=spec.tags(),
+                )
             )
             if spec.taxable:
                 taxable_unblended += unblended

@@ -8,15 +8,15 @@ from mcca.config import Settings
 def test_defaults(settings: Settings) -> None:
     assert settings.database_url.startswith("postgresql+psycopg://")
     assert settings.aws_region == "us-east-1"
-    assert settings.langsmith_tracing is False
+    assert settings.langfuse_enabled is False
 
 
 def test_env_override(monkeypatch) -> None:
     monkeypatch.setenv("MCCA_AWS_REGION", "eu-west-1")
-    monkeypatch.setenv("MCCA_LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("MCCA_LANGFUSE_ENABLED", "true")
     s = Settings(_env_file=None)
     assert s.aws_region == "eu-west-1"
-    assert s.langsmith_tracing is True
+    assert s.langfuse_enabled is True
 
 
 def test_no_hardcoded_secrets(settings: Settings) -> None:

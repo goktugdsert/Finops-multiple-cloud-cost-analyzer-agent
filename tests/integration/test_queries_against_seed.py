@@ -85,8 +85,9 @@ def test_monthly_and_mom(repo: PostgresRepository) -> None:
     assert billed["effective_cost"] < billed["billed_cost"]
 
 
-def test_attribution_is_honest_unattributed(repo: PostgresRepository) -> None:
-    teams = run_query(repo, "spend_by_team", _params()).rows
-    assert len(teams) == 1
-    assert teams[0]["x_team"] == UNATTRIBUTED
-    assert teams[0]["amount"] > Decimal("0")
+def test_attribution_splits_by_team_with_honest_unattributed(repo: PostgresRepository) -> None:
+    teams = {r["x_team"]: r["amount"] for r in run_query(repo, "spend_by_team", _params()).rows}
+    # Tagged usage rolls up to teams; untagged spend (EBS, tax, credits) stays honest.
+    assert "platform" in teams
+    assert "data" in teams
+    assert teams[UNATTRIBUTED] > Decimal("0")

@@ -17,7 +17,7 @@ Design notes (v1):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -47,6 +47,7 @@ class RawCostRow:
     groups: dict[str, str]  # e.g. {"SERVICE": "Amazon EC2", "RECORD_TYPE": "Usage"}
     metrics: dict[str, dict[str, str]]  # e.g. {"NetUnblendedCost": {"Amount","Unit"}}
     estimated: bool
+    tags: dict[str, str] = field(default_factory=dict)  # cost-allocation tags on the line
 
 
 def flatten_response(
@@ -71,6 +72,7 @@ def flatten_response(
                             groups=labeled,
                             metrics=grp.get("Metrics", {}),
                             estimated=estimated,
+                            tags=grp.get("Tags", {}),
                         )
                     )
             else:
