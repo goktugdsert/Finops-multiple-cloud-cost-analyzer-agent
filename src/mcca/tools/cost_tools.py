@@ -323,6 +323,29 @@ def _make_routing_tool(repo: WarehouseRepository) -> BaseTool:
     )
 
 
+def catalog_hint(repo: WarehouseRepository) -> str:
+    """A compact list of the exact provider/service names in the warehouse, for the prompt.
+
+    Grounds the agent so it never invents a service name (and knows to disambiguate a
+    generic term across clouds). Returns "" if the warehouse is empty/unreadable — it must
+    never break agent construction.
+    """
+    try:
+        rows = run_query(repo, "service_catalog", {}).rows
+    except Exception:  # noqa: BLE001 - a missing catalog just means no hint
+        return ""
+    by_provider: dict[str, list[str]] = {}
+    for row in rows:
+        provider, service = row.get("provider_name"), row.get("service_name")
+        if provider and service:
+            by_provider.setdefault(provider, []).append(service)
+    if not by_provider:
+        return ""
+    lines = ["Services currently in the warehouse (use these EXACT names; never invent one):"]
+    lines += [f"- {p}: {', '.join(sorted(by_provider[p]))}" for p in sorted(by_provider)]
+    return "\n".join(lines)
+
+
 def get_cost_tools(repo: WarehouseRepository) -> list[BaseTool]:
     """Build the agent's tools: queries + forecast + detection + budget + explain + route."""
     tools = [_make_tool(d, repo) for d in list_queries() if d.agent_facing]

@@ -29,6 +29,7 @@ EXPECTED_QUERIES = {
     "daily_spend_by_service",
     "charge_date_bounds",
     "service_owners",
+    "service_catalog",
     "spend_by_team",
     "spend_by_environment",
     "month_over_month",

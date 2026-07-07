@@ -20,7 +20,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from mcca.agent.prompts import SYSTEM_PROMPT
 from mcca.agent.state import AgentState
-from mcca.tools.cost_tools import get_cost_tools
+from mcca.tools.cost_tools import catalog_hint, get_cost_tools
 
 if TYPE_CHECKING:
     from mcca.warehouse.repository import WarehouseRepository
@@ -33,10 +33,14 @@ def build_agent_graph(
     tools = get_cost_tools(repo)
     model_with_tools = model.bind_tools(tools)
 
+    # Ground the prompt with the exact service names present, so the model doesn't guess.
+    catalog = catalog_hint(repo)
+    prompt = f"{system_prompt}\n\n{catalog}" if catalog else system_prompt
+
     def call_model(state: AgentState) -> dict[str, Any]:
         messages = list(state["messages"])
         if not messages or getattr(messages[0], "type", None) != "system":
-            messages = [SystemMessage(content=system_prompt), *messages]
+            messages = [SystemMessage(content=prompt), *messages]
         return {"messages": [model_with_tools.invoke(messages)]}
 
     builder = StateGraph(AgentState)

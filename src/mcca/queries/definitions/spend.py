@@ -81,7 +81,8 @@ def _build_daily_spend_by_service(params: dict[str, Any]) -> Select:
 register(
     QueryDefinition(
         "total_spend",
-        "Total billed and effective spend over a date range.",
+        "Total billed and effective spend across ALL services and clouds over a date range "
+        "(a grand total — not for a single service).",
         (_START, _END),
         _build_total_spend,
     )
@@ -89,7 +90,8 @@ register(
 register(
     QueryDefinition(
         "spend_by_service",
-        "Spend grouped by AWS service over a date range, highest first.",
+        "Spend grouped by service over a date range, highest first. Use this for any "
+        "question about a specific service or ranking services.",
         (_START, _END, metric_param(), QueryParam("charge_category"), QueryParam("limit")),
         _build_spend_by_service,
     )
@@ -121,7 +123,8 @@ register(
 register(
     QueryDefinition(
         "monthly_spend",
-        "Spend per calendar month over a date range.",
+        "Total spend per calendar month across ALL services and clouds (a monthly grand "
+        "total — not for a single service).",
         (_START, _END, metric_param()),
         _build_monthly_spend,
     )
@@ -176,6 +179,25 @@ register(
         "Team/owner attribution per service (internal; used to route findings).",
         (_START, _END, metric_param(), QueryParam("charge_category")),
         _build_service_owners,
+        agent_facing=False,
+    )
+)
+
+
+def _build_service_catalog(params: dict[str, Any]) -> Select:
+    return (
+        select(focus_costs.c.provider_name, focus_costs.c.service_name)
+        .distinct()
+        .order_by(focus_costs.c.provider_name, focus_costs.c.service_name)
+    )
+
+
+register(
+    QueryDefinition(
+        "service_catalog",
+        "Distinct provider/service names present (internal; grounds the agent's tool use).",
+        (),
+        _build_service_catalog,
         agent_facing=False,
     )
 )
