@@ -46,6 +46,10 @@ class FakeRepository(WarehouseRepository):
         self.records.extend(records)
         return len(records)
 
+    def upsert_records(self, records: Sequence[FocusRecord]) -> int:
+        self.records.extend(records)
+        return len(records)
+
     def fetch_all(self) -> list[dict[str, Any]]:  # pragma: no cover - not used here
         return [r.model_dump() for r in self.records]
 

@@ -16,8 +16,12 @@ from mcca.warehouse.repository import WarehouseRepository
 
 
 def load_records(repo: WarehouseRepository, records: Sequence[FocusRecord]) -> int:
-    """Persist normalized records through the warehouse repository."""
-    return repo.insert_records(records)
+    """Reconcile normalized records into the warehouse (upsert on natural identity).
+
+    Uses upsert so re-ingesting an overlapping period corrects existing lines and applies
+    estimate->final restatements in place, instead of double-counting.
+    """
+    return repo.upsert_records(records)
 
 
 def ingest_cost_and_usage(
@@ -28,9 +32,9 @@ def ingest_cost_and_usage(
     settings: Settings | None = None,
     client: object | None = None,
 ) -> int:
-    """Fetch [start, end) from Cost Explorer, normalize to FOCUS, and load. Read-only.
+    """Fetch [start, end) from Cost Explorer, normalize to FOCUS, and reconcile. Read-only.
 
-    Returns the number of rows written. `end` is exclusive, matching Cost Explorer.
+    Returns the number of rows processed. `end` is exclusive, matching Cost Explorer.
     """
     settings = settings or get_settings()
     billing_account_id = settings.aws_billing_account_id or "unknown"

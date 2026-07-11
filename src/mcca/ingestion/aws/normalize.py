@@ -111,6 +111,7 @@ def normalize_row(row: RawCostRow, billing_account_id: str = "unknown") -> Focus
         service_name=row.groups.get("SERVICE"),
         consumed_quantity=_optional_amount(row.metrics, "UsageQuantity"),
         consumed_unit=row.metrics.get("UsageQuantity", {}).get("Unit"),
+        is_estimated=row.estimated,  # carried through for estimate->final reconciliation
         tags=row.tags or None,
         source_system="aws.cost_explorer",
         **attribution_from_tags(row.tags),

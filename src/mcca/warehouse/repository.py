@@ -26,7 +26,22 @@ class WarehouseRepository(ABC):
 
     @abstractmethod
     def insert_records(self, records: Sequence[FocusRecord]) -> int:
-        """Persist normalized FOCUS records. Returns the number of rows written."""
+        """Persist normalized FOCUS records (plain append). Returns rows written.
+
+        Used for one-shot loads into a fresh warehouse. Repeated ingestion of overlapping
+        periods should go through `upsert_records` to avoid double-counting.
+        """
+
+    @abstractmethod
+    def upsert_records(self, records: Sequence[FocusRecord]) -> int:
+        """Reconcile normalized FOCUS records against existing rows by natural identity.
+
+        Rows are keyed on `FocusRecord.natural_key()` (the line's billing identity, not its
+        amounts). A record whose key already exists overwrites that row's cost measures,
+        quantities and estimate flag — so re-ingesting a period corrects in place and an
+        estimate is replaced by its final restatement, rather than duplicating. Returns the
+        number of records processed.
+        """
 
     @abstractmethod
     def fetch_all(self) -> list[dict[str, Any]]:

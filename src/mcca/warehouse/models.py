@@ -11,6 +11,7 @@ here. Costs use ``Decimal`` (not float) to preserve exactness.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from decimal import Decimal
 
@@ -78,6 +79,11 @@ class FocusRecord(BaseModel):
     contracted_unit_price: Decimal | None = None
     pricing_category: str | None = None
 
+    # --- Restatement / reconciliation ---------------------------------------
+    # Did the source mark this line an estimate? Estimates are later restated to a final;
+    # ingestion upserts on natural_key() so the final overwrites the estimate in place.
+    is_estimated: bool = False
+
     # --- Raw provider tags ---------------------------------------------------
     tags: dict[str, str] | None = None
 
@@ -89,3 +95,31 @@ class FocusRecord(BaseModel):
 
     # --- Provenance ----------------------------------------------------------
     source_system: str | None = None
+
+    def natural_key(self) -> str:
+        """Stable hash of this line's natural billing identity (NOT its cost measures).
+
+        Two records that describe the *same* billing line — same provider, account, day,
+        service, charge type, SKU/resource/region, commitment — share a key even if their
+        amounts differ. That is exactly what lets re-ingestion reconcile: an estimate and
+        its later final restatement collide on this key and the final overwrites the
+        estimate, instead of both accumulating. The cost/quantity measures are deliberately
+        excluded so a restated amount does not mint a new row.
+        """
+        parts = [
+            self.source_system,
+            self.provider_name,
+            self.billing_account_id,
+            self.sub_account_id,
+            self.charge_period_start.date().isoformat(),
+            self.service_name,
+            self.charge_category,
+            self.charge_description,
+            self.sku_id,
+            self.resource_id,
+            self.region_id,
+            self.commitment_discount_id,
+        ]
+        # \x1f (unit separator) can't occur in these values; None -> distinct sentinel.
+        canonical = "\x1f".join("\x00" if p is None else str(p) for p in parts)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

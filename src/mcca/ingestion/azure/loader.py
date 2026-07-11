@@ -23,4 +23,5 @@ def ingest_cost_management(
     billing_account_id = settings.azure_billing_account_id or "unknown"
     rows = fetch_cost_management(start, end, client=client)
     records = normalize_records(rows, billing_account_id=billing_account_id)
-    return repo.insert_records(records)
+    # Upsert (not append) so re-ingesting a period reconciles instead of double-counting.
+    return repo.upsert_records(records)

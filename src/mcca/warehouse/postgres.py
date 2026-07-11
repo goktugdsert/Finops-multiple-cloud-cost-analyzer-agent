@@ -9,12 +9,28 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Engine, Executable, insert, select
+from sqlalchemy import Engine, Executable, func, insert, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from mcca.warehouse.engine import create_warehouse_engine
 from mcca.warehouse.models import FocusRecord
 from mcca.warehouse.repository import WarehouseRepository
 from mcca.warehouse.schema import focus_costs, metadata
+
+# Columns a restatement is allowed to overwrite on an existing line (its measures and
+# estimate flag). The line's identity columns are never updated — they define the key.
+_RESTATABLE_COLUMNS = (
+    "billed_cost",
+    "effective_cost",
+    "list_cost",
+    "contracted_cost",
+    "consumed_quantity",
+    "pricing_quantity",
+    "is_estimated",
+    "charge_class",
+    "tags",
+    "source_system",
+)
 
 
 class PostgresRepository(WarehouseRepository):
@@ -30,13 +46,40 @@ class PostgresRepository(WarehouseRepository):
     def create_schema(self) -> None:
         metadata.create_all(self._engine)
 
+    @staticmethod
+    def _row(record: FocusRecord) -> dict[str, Any]:
+        """Serialize a record and stamp its natural-identity key for (up)sert."""
+        return {**record.model_dump(), "line_key": record.natural_key()}
+
     def insert_records(self, records: Sequence[FocusRecord]) -> int:
-        rows = [r.model_dump() for r in records]
+        rows = [self._row(r) for r in records]
         if not rows:
             return 0
         with self._engine.begin() as conn:
             conn.execute(insert(focus_costs), rows)
         return len(rows)
+
+    def upsert_records(self, records: Sequence[FocusRecord]) -> int:
+        rows = [self._row(r) for r in records]
+        if not rows:
+            return 0
+        # A single batch may legitimately be re-fetched twice for the same period; collapse
+        # duplicate keys within the batch (last wins) so ON CONFLICT never hits the same
+        # target row twice in one statement.
+        deduped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            deduped[row["line_key"]] = row
+        batch = list(deduped.values())
+
+        stmt = pg_insert(focus_costs).values(batch)
+        set_ = {col: stmt.excluded[col] for col in _RESTATABLE_COLUMNS}
+        set_["ingested_at"] = func.now()  # record when the line was last restated
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[focus_costs.c.line_key], set_=set_
+        )
+        with self._engine.begin() as conn:
+            conn.execute(stmt)
+        return len(records)
 
     def fetch_all(self) -> list[dict[str, Any]]:
         with self._engine.connect() as conn:

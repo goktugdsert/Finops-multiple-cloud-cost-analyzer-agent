@@ -23,4 +23,5 @@ def ingest_billing_export(
     billing_account_id = settings.gcp_billing_account_id or "unknown"
     rows = fetch_billing_export(start, end, client=client)
     records = normalize_records(rows, billing_account_id=billing_account_id)
-    return repo.insert_records(records)
+    # Upsert (not append) so re-ingesting a period reconciles instead of double-counting.
+    return repo.upsert_records(records)

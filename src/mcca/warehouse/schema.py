@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Index,
@@ -28,6 +29,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -95,6 +97,14 @@ focus_costs = Table(
     Column("list_unit_price", Numeric(30, 15), nullable=True),
     Column("contracted_unit_price", Numeric(30, 15), nullable=True),
     Column("pricing_category", Text, nullable=True),  # Standard|Committed|On-Demand
+    # --- Restatement / reconciliation ---------------------------------------
+    # Whether the source reported this line as an estimate (subject to a later final
+    # restatement). Carried through so re-ingestion can overwrite an estimate with its
+    # final. `line_key` is a stable hash of the line's natural billing identity (NOT its
+    # cost measures); it is UNIQUE so re-ingesting a period upserts in place instead of
+    # duplicating. See FocusRecord.natural_key().
+    Column("is_estimated", Boolean, nullable=False, server_default=text("false")),
+    Column("line_key", Text, nullable=False),
     # --- Raw provider tags (JSON) -------------------------------------------
     Column("tags", JSONB, nullable=True),
     # --- ATTRIBUTION (custom x_ columns, reserved from row one) -------------
@@ -109,6 +119,8 @@ focus_costs = Table(
     Index("ix_focus_costs_charge_period", "charge_period_start", "charge_period_end"),
     Index("ix_focus_costs_provider_service", "provider_name", "service_name"),
     Index("ix_focus_costs_attribution", "x_team", "x_environment"),
+    # Natural billing-line identity: upsert target for estimate->final reconciliation.
+    UniqueConstraint("line_key", name="uq_focus_costs_line_key"),
 )
 
 # Budgets are user-set monthly targets (not derived cost figures) that spend is tracked
