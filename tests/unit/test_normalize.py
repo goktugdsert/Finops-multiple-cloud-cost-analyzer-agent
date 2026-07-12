@@ -167,6 +167,23 @@ def test_savings_plan_recurring_fee_is_a_purchase() -> None:
     assert rec.commitment_discount_category == "Spend"
 
 
+def test_contracted_cost_is_ingested_between_list_and_billed() -> None:
+    row = _row(
+        "Usage",
+        {
+            "NetUnblendedCost": {"Amount": "90.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "90.00", "Unit": "USD"},
+            "ListCost": {"Amount": "100.00", "Unit": "USD"},
+            "ContractedCost": {"Amount": "90.00", "Unit": "USD"},
+        },
+    )
+    rec = normalize_row(row)
+    assert rec.list_cost == Decimal("100.00")
+    assert rec.contracted_cost == Decimal("90.00")
+    # The FOCUS discount stack holds: list >= contracted >= billed.
+    assert rec.list_cost >= rec.contracted_cost >= rec.billed_cost
+
+
 def test_blended_cost_is_captured_but_never_billed() -> None:
     # RI-covered usage: blended (consolidated avg) differs from the unblended billed amount.
     row = _row(

@@ -50,6 +50,9 @@ def normalize_row(row: GcpCostRow, billing_account_id: str = "unknown") -> Focus
         billed_cost=net,
         effective_cost=net,
         list_cost=row.cost,  # gross list price before credits
+        # No separate negotiated tier is modeled for GCP; the CUD is the only discount, so
+        # contracted (pre-commitment) equals the gross list price.
+        contracted_cost=row.cost,
         commitment_discount_type="Committed Use Discount" if has_cud else None,
         commitment_discount_category="Usage" if has_cud else None,
         commitment_discount_status="Used" if has_cud else None,

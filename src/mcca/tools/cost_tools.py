@@ -15,11 +15,15 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import Field, create_model
 
+from mcca.allocation.service import allocate_team_spend
 from mcca.analysis.drivers import explain_change
 from mcca.budgets.service import spend_vs_budget
 from mcca.detection.service import detect
 from mcca.forecasting.model import summarize_forecast
 from mcca.forecasting.service import forecast_daily_spend
+from mcca.governance.service import evaluate_policies
+from mcca.knowledge.service import search_knowledge
+from mcca.optimization.service import review_recommendations
 from mcca.queries.registry import (
     COST_METRICS,
     QueryDefinition,
@@ -339,6 +343,167 @@ def _make_routing_tool(repo: WarehouseRepository) -> BaseTool:
     )
 
 
+def _make_allocation_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        result = allocate_team_spend(
+            repo,
+            kwargs["start"],
+            kwargs["end"],
+            method=kwargs.get("method") or "proportional",
+            metric=kwargs.get("metric") or "billed_cost",
+            weights=kwargs.get("weights"),
+        )
+        return {
+            "method": result.method,
+            "shared_pool": str(result.shared_pool),
+            "unallocated": str(result.unallocated),
+            "teams": [
+                {
+                    "team": t.team,
+                    "direct": str(t.direct),
+                    "allocated": str(t.allocated),
+                    "total": str(t.total),
+                }
+                for t in result.teams
+            ],
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="allocate_shared_spend",
+        description=(
+            "Compute fully-loaded team cost by allocating shared/'unattributed' spend across "
+            "teams over [start, end). Returns each team's direct spend, its allocated share of "
+            "the shared pool, and the total. `method`: proportional (default, by direct spend), "
+            "even, or weighted (requires `weights`, a team->number map). Use this for 'including "
+            "shared costs' / 'fully-loaded' team questions; `spend_by_team` alone is direct "
+            "(tagged) spend only."
+        ),
+        args_schema=create_model(
+            "allocate_shared_spend_args",
+            start=(date, Field(..., description="Window start, ISO date YYYY-MM-DD.")),
+            end=(date, Field(..., description="Window end (exclusive), ISO date YYYY-MM-DD.")),
+            method=(
+                str | None,
+                Field("proportional", description="proportional | even | weighted."),
+            ),
+            metric=(str | None, Field("billed_cost", description=f"One of {list(COST_METRICS)}.")),
+            weights=(
+                dict[str, float] | None,
+                Field(None, description='For method=weighted: team->weight, e.g. {"platform": 3}.'),
+            ),
+        ),
+    )
+
+
+def _make_governance_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        violations = evaluate_policies(
+            repo, kwargs["start"], kwargs["end"], metric=kwargs.get("metric") or "billed_cost"
+        )
+        return {
+            "violations": [
+                {
+                    "policy_id": v.policy_id,
+                    "kind": v.kind,
+                    "severity": v.severity,
+                    "scope": v.scope,
+                    "observed": str(v.observed),
+                    "threshold": str(v.threshold),
+                    "summary": v.summary,
+                    "recommendation": v.recommendation,
+                }
+                for v in violations
+            ]
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="check_policies",
+        description=(
+            "Evaluate spend over [start, end) against the governance policy set — untagged-spend "
+            "limits, per-team caps, and restricted services — and return policy VIOLATIONS, each "
+            "with a recommended action. Use for compliance / 'are we following our cost policies' "
+            "/ 'any policy violations' questions. Recommend-only: nothing is enforced."
+        ),
+        args_schema=create_model(
+            "check_policies_args",
+            start=(date, Field(..., description="Window start, ISO date YYYY-MM-DD.")),
+            end=(date, Field(..., description="Window end (exclusive), ISO date YYYY-MM-DD.")),
+            metric=(str | None, Field("billed_cost", description=f"One of {list(COST_METRICS)}.")),
+        ),
+    )
+
+
+def _make_review_tool(repo: WarehouseRepository) -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        result = review_recommendations(repo, kwargs["start"], kwargs["end"])
+        return {
+            "counts": result.counts,
+            "recommendations": [
+                {
+                    "key": r.key,
+                    "source": r.source,
+                    "kind": r.kind,
+                    "severity": r.severity,
+                    "scope": r.scope,
+                    "amount": None if r.amount is None else str(r.amount),
+                    "summary": r.summary,
+                    "action": r.action,
+                    "status": r.status,
+                    "decided_by": r.decided_by,
+                }
+                for r in result.recommendations
+            ],
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="review_recommendations",
+        description=(
+            "List the current cost recommendations (from findings + policy violations) over "
+            "[start, end), each with its human decision STATUS (PROPOSED / APPROVED / DISMISSED "
+            "/ SNOOZED) and a status summary. READ-ONLY: report status; you cannot approve or "
+            "change decisions — a human records those. Use for 'what's approved / pending / "
+            "dismissed' and 'what should we act on' questions."
+        ),
+        args_schema=create_model(
+            "review_recommendations_args",
+            start=(date, Field(..., description="Window start, ISO date YYYY-MM-DD.")),
+            end=(date, Field(..., description="Window end (exclusive), ISO date YYYY-MM-DD.")),
+        ),
+    )
+
+
+def _make_knowledge_tool() -> BaseTool:
+    def _run(**kwargs: Any) -> dict[str, Any]:
+        passages = search_knowledge(kwargs["query"], k=kwargs.get("k") or 3)
+        return {
+            "passages": [
+                {"title": p.title, "source": p.source, "text": p.text, "score": p.score}
+                for p in passages
+            ]
+        }
+
+    return StructuredTool.from_function(
+        func=_run,
+        name="search_knowledge",
+        description=(
+            "Search the qualitative FinOps knowledge base (concept definitions, cost-measure "
+            "meanings, tagging/allocation/governance policy, forecasting caveats, the trust "
+            "boundary) and return relevant passages. Use for conceptual questions — 'what is', "
+            "'how does', 'explain', 'define', 'why', 'what is our policy on'. It is NOT a source "
+            "of cost figures: it returns only qualitative documentation, so for any dollar "
+            "amount use the numeric query tools, never this."
+        ),
+        args_schema=create_model(
+            "search_knowledge_args",
+            query=(str, Field(..., description="The concept/definition/policy question.")),
+            k=(int | None, Field(3, description="Max passages to return.")),
+        ),
+    )
+
+
 def catalog_hint(repo: WarehouseRepository) -> str:
     """A compact list of the exact provider/service names in the warehouse, for the prompt.
 
@@ -370,4 +535,8 @@ def get_cost_tools(repo: WarehouseRepository) -> list[BaseTool]:
     tools.append(_make_budget_tool(repo))
     tools.append(_make_explain_tool(repo))
     tools.append(_make_routing_tool(repo))
+    tools.append(_make_allocation_tool(repo))
+    tools.append(_make_governance_tool(repo))
+    tools.append(_make_review_tool(repo))
+    tools.append(_make_knowledge_tool())
     return tools

@@ -103,7 +103,7 @@ clouds (handle discounts, credits, amortization, blended vs unblended).
 
 **TL;DR:** v1 is **feature-complete and validated on synthetic data.** All 7 build steps
 done, all 3 clouds, the full loop, both pillars, report + web chat UI + eval + Langfuse
-tracing. **164 tests passing (+1 explicitly-skipped live check), ruff clean, CI on push.**
+tracing. **206 tests passing (+1 explicitly-skipped live check), ruff clean, CI on push.**
 Runs on **synthetic data only** (no real cloud accounts — a standing project decision).
 
 Honest framing (do not overstate): "validated" means **provably correct against our own
@@ -166,17 +166,23 @@ src/mcca/
     synthetic/  generator.py(AWS) azure.py gcp.py client.py seed.py
                 # synthetic providers emit each cloud's native shape; deterministic per seed
   queries/  registry.py definitions/{spend,attribution,trends}.py
-  tools/    cost_tools.py     # 12 agent tools + catalog_hint()
+  tools/    cost_tools.py     # 16 agent tools + catalog_hint()
   agent/    graph.py state.py model.py prompts.py   # model.py = provider factory
   forecasting/  model.py service.py
   detection/    detector.py service.py
   budgets/      model.py store.py service.py
   analysis/     drivers.py                          # explain-why (cost drivers)
+  allocation/   policy.py service.py                # v2: shared-cost allocation onto teams
+  governance/   policy.py service.py                # v2: policy engine (recommend-only)
+  optimization/ model.py store.py service.py cli.py # v2: recommendation approval workflow
+  knowledge/    corpus.py retriever.py service.py   # v2: RAG (qualitative only, no numbers)
   routing/      router.py                           # findings -> owner + recommendation
   surface/      report.py(HTML) web.py(FastAPI chat)
   eval/         dataset.py runner.py(tool-selection + faithfulness) numeric.py faithfulness.py
 migrations/  0001_focus_schema 0002_budgets 0003_line_reconciliation 0004_blended_cost
-             # 0003/0004 are idempotent (0001 create_all builds current schema on fresh DBs)
+             0005_recommendation_decisions
+             # 0003/0004 idempotent, 0002/0005 use checkfirst (0001 create_all builds current
+             # schema on fresh DBs)
 ```
 
 ## Registered queries (queries/registry.py)
@@ -188,10 +194,46 @@ charge_date_bounds, service_owners, service_catalog`.
 `run_query(repo, name, params)` validates params + carries provenance; repo.execute()
 runs prepared Core statements only (no string SQL).
 
-## Agent tools (tools/cost_tools.py) — 12
+## Agent tools (tools/cost_tools.py) — 16
 One per agent-facing query, plus `forecast_spend, detect_anomalies, spend_vs_budget,
-explain_change, route_findings`. `get_cost_tools(repo)` builds them; `catalog_hint(repo)`
-injects the exact provider/service names into the system prompt at build time.
+explain_change, route_findings, allocate_shared_spend, check_policies,
+review_recommendations, search_knowledge`. `get_cost_tools(repo)` builds them;
+`catalog_hint(repo)` injects the exact provider/service names into the system prompt at build
+time. NOTE: `review_recommendations` is READ-ONLY (reports decision status, cannot approve —
+only the human `mcca-review` CLI records decisions); `search_knowledge` is QUALITATIVE-ONLY
+(concept/policy docs, never a source of a cost figure).
+
+## v2 progress (post-v1)
+- ✅ **contracted_cost** populated across all clouds — the FOCUS cost stack (list ≥ contracted
+  ≥ billed ≥ effective) is now complete (`negotiated_discount` in the AWS generator; Azure/GCP
+  use documented defaults). Proven: `test_messy_cases_seed.py`, normalize unit tests.
+- ✅ **Attribution allocation policy** (`allocation/`) — derives fully-loaded team cost by
+  splitting the shared/'unattributed' pool across teams (proportional/even/weighted). The
+  warehouse is NOT mutated (raw stays honest); allocation is a deterministic calc over
+  `spend_by_team` that reconciles to the pool exactly. Tool: `allocate_shared_spend`. Proven:
+  `tests/unit/test_allocation.py`, `tests/integration/test_allocation_seed.py`.
+- ✅ **Governance policy engine** (`governance/`) — declarative policies (untagged_limit,
+  team_cap, denied_service) evaluated against the fixed queries, flagging VIOLATIONS with a
+  recommended action. Recommend-only (never enforces). Tool: `check_policies`; shown in the
+  dashboard as a "Policy compliance" panel. Proven: `tests/unit/test_governance.py`,
+  `tests/integration/test_governance_seed.py`.
+- ✅ **Optimization + approval workflow** (`optimization/`) — unifies routing findings +
+  governance violations into live `Recommendation`s with a stable key; a human records a
+  decision (approve/dismiss/snooze) via the `mcca-review` CLI, persisted in
+  `recommendation_decisions` (migration `0005`). Recommendations are always recomputed
+  (grounded); only the decision is stored. **A decision records intent only — nothing is
+  executed** (stays read-only vs. infra). Agent tool `review_recommendations` is READ-ONLY
+  (reports status, cannot approve). Proven: `tests/unit/test_optimization.py`,
+  `tests/integration/test_optimization_seed.py`.
+- ✅ **RAG knowledge layer** (`knowledge/`) — a curated qualitative corpus (concepts, cost-measure
+  definitions, tagging/allocation/governance policy, forecasting caveats, the trust boundary)
+  behind a swappable `Retriever` interface (default: dependency-free lexical/BM25-lite; a
+  pgvector/embedding backend can swap in later). Tool `search_knowledge`. **STRICTLY qualitative
+  — never a source of a cost figure**: a unit test asserts the corpus contains no dollar amounts,
+  so RAG structurally cannot supply a number. Open NL→SQL is deliberately NOT built — the fixed
+  query registry IS the semantic layer for numbers. Proven: `tests/unit/test_knowledge.py`.
+- **v2 roadmap complete.** Remaining out-of-scope by principle: optimization auto-actioning
+  (permanent — read-only), and open-ended text-to-SQL (numbers stay behind the fixed queries).
 
 ## LLM provider — config-driven (agent/model.py)
 `MCCA_LLM_PROVIDER` ∈ {google, ollama, anthropic, openai}. **Currently: ollama /
@@ -205,7 +247,8 @@ qwen3.5:9b** (local, free, unlimited, ~80 s/answer on a 6 GB GPU). Gemini
 clouds, sets a $9k budget). Then: `uv run mcca-web` (chat UI at 127.0.0.1:8000),
 `uv run mcca "question"` (CLI), `uv run mcca-report` (HTML), `uv run mcca-eval`
 (tool-selection + prose faithfulness), `uv run mcca-eval-numeric` (deterministic
-fixture-exact query check — no LLM), `uv run pytest` (164 tests, +1 skipped live check).
+fixture-exact query check — no LLM), `uv run mcca-review` (human approval CLI:
+list/approve/dismiss recommendations), `uv run pytest` (206 tests, +1 skipped live check).
 `mcca-seed --cloud {aws,azure,gcp,all}`. NOTE: `uv run pytest` DROPS the seeded data
 (integration fixtures drop_all at teardown) — re-seed afterward. Re-ingestion is now
 idempotent (upsert), so `mcca-seed` can be re-run without double-counting. Both `mcca-web`

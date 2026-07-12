@@ -68,4 +68,27 @@ EVAL_CASES: list[EvalCase] = [
         "What cost findings should we act on between 2026-01-01 and 2026-07-01, and who owns them?",
         frozenset({"route_findings"}),
     ),
+    # --- v2 capabilities -----------------------------------------------------
+    EvalCase(
+        "allocate_shared_spend",
+        "What is each team's fully-loaded cost including shared/unattributed spend "
+        "from 2026-01-01 to 2026-04-01?",
+        frozenset({"allocate_shared_spend"}),
+    ),
+    EvalCase(
+        "check_policies",
+        "Are we breaching any cost governance policies between 2026-01-01 and 2026-07-01?",
+        frozenset({"check_policies"}),
+    ),
+    EvalCase(
+        "review_recommendations",
+        "Which cost recommendations are still pending versus approved "
+        "between 2026-01-01 and 2026-07-01?",
+        frozenset({"review_recommendations"}),
+    ),
+    EvalCase(
+        "search_knowledge",
+        "Explain the difference between blended and unblended cost.",
+        frozenset({"search_knowledge"}),
+    ),
 ]

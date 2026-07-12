@@ -97,6 +97,34 @@ def test_blended_cost_captured_but_not_billed(repo: PostgresRepository) -> None:
     assert differing > 0
 
 
+def test_contracted_cost_is_populated_across_clouds(repo: PostgresRepository) -> None:
+    # The one FOCUS cost measure that used to be always-NULL is now set for every cloud.
+    for provider in ("AWS", "Azure"):
+        null_contracted = _count(
+            repo,
+            and_(
+                focus_costs.c.provider_name == provider,
+                focus_costs.c.contracted_cost.is_(None),
+            ),
+        )
+        assert null_contracted == 0, f"{provider} has NULL contracted_cost rows"
+
+
+def test_aws_discount_stack_holds_list_ge_contracted_ge_billed(repo: PostgresRepository) -> None:
+    # For AWS on-demand usage the full stack is representable and ordered correctly.
+    violations = _count(
+        repo,
+        and_(
+            focus_costs.c.provider_name == "AWS",
+            focus_costs.c.charge_category == "Usage",
+            focus_costs.c.charge_description == "Usage",
+            focus_costs.c.billed_cost > 0,
+            focus_costs.c.list_cost < focus_costs.c.contracted_cost,
+        ),
+    )
+    assert violations == 0
+
+
 def test_azure_credits_and_adjustments_present(repo: PostgresRepository) -> None:
     credits = _count(
         repo,

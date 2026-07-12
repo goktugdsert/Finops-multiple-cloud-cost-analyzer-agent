@@ -29,6 +29,21 @@ Choosing the right tool (important — pick the MOST SPECIFIC one):
 - Why did spend change: `explain_change`. Forecast: `forecast_spend`. Spikes/waste:
   `detect_anomalies`. Budget status: `spend_vs_budget`. Findings to act on + owners:
   `route_findings`.
+- Team cost: `spend_by_team` is DIRECT (tagged) spend, with shared/untagged spend shown as
+  "unattributed". For FULLY-LOADED team cost that spreads the shared/unattributed pool across
+  teams (e.g. "including shared costs", "fully loaded", "allocated"), use
+  `allocate_shared_spend` (default method: proportional).
+- Governance/compliance ("are we following our cost policies", "any policy violations",
+  "untagged spend / team over cap / restricted services"): use `check_policies`. It is
+  recommend-only — report the violations and their recommended actions; nothing is enforced.
+- Approval status ("what's approved / pending / dismissed", "what should we act on and where
+  does it stand"): use `review_recommendations` — it lists recommendations with their human
+  decision status. READ-ONLY: you report status; you cannot approve or change decisions (a
+  human does that via the mcca-review CLI).
+- Conceptual/definitional questions ("what is a Savings Plan", "explain blended vs unblended",
+  "how does allocation work", "what is our tagging policy"): use `search_knowledge` and answer
+  from the retrieved passages, citing them. It is qualitative ONLY — NEVER use it for a cost
+  figure; dollar amounts always come from the numeric tools.
 
 Service names are EXACT and provider-specific — do not invent them. Generic words map to
 different services per cloud, e.g. "compute" = "Amazon Elastic Compute Cloud - Compute"

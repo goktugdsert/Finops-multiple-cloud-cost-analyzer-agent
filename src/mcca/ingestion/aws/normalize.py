@@ -7,7 +7,8 @@ are trusted (CLAUDE.md, "where quality lives").
 Cost-measure mapping (Cost Explorer metric -> FOCUS column):
     billed_cost     <- NetUnblendedCost   (invoiced amount, after credits/refunds)
     effective_cost  <- NetAmortizedCost   (amortized RIs/SPs, after credits/refunds)
-    list_cost       <- ListCost           (on-demand, pre-discount; CUR-grade — see below)
+    list_cost       <- ListCost           (public on-demand, pre-discount; CUR-grade)
+    contracted_cost <- ContractedCost      (negotiated rate, pre-commitment; CUR-grade)
     x_blended_cost  <- BlendedCost         (consolidated average; captured, never billed)
 Using the *Net* metrics means credits and refunds are already reflected in the headline
 figures; credit/refund line items themselves also appear as their own rows (RECORD_TYPE
@@ -123,9 +124,11 @@ def normalize_row(row: RawCostRow, billing_account_id: str = "unknown") -> Focus
     return FocusRecord(
         billed_cost=_amount(row.metrics, BILLED_METRIC),
         effective_cost=_amount(row.metrics, EFFECTIVE_METRIC),
-        # ListCost (on-demand, pre-discount) and BlendedCost come from CUR-grade data; when
-        # present they let us represent the full list -> billed -> effective discount stack.
+        # ListCost (public), ContractedCost (negotiated rate) and BlendedCost come from
+        # CUR-grade data; together they represent the full list -> contracted -> billed ->
+        # effective discount stack.
         list_cost=_optional_amount(row.metrics, "ListCost"),
+        contracted_cost=_optional_amount(row.metrics, "ContractedCost"),
         x_blended_cost=_optional_amount(row.metrics, "BlendedCost"),
         billing_currency=_unit(row.metrics, BILLED_METRIC, "USD"),
         billing_account_id=billing_account_id,

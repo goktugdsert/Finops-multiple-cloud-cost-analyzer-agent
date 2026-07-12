@@ -185,6 +185,10 @@ class GeneratorConfig:
     # amortizes back onto the usage — the accurate AWS SP shape.
     savings_plan: bool = True
     sp_discount: float = 0.27
+    # Enterprise/negotiated discount off the public list price (e.g. an EDP). The modeled
+    # rates are the NEGOTIATED (contracted) rates you're billed, so ContractedCost == billed
+    # for on-demand usage and the public ListCost sits above it: list = billed / (1 - edp).
+    negotiated_discount: float = 0.10
     anomalies: tuple[tuple[int, str, float], ...] = field(default=DEFAULT_ANOMALIES)
 
 
@@ -200,14 +204,17 @@ def _metrics(
     currency: str = "USD",
     *,
     list_cost: Decimal | None = None,
+    contracted: Decimal | None = None,
     blended: Decimal | None = None,
 ) -> dict[str, dict[str, str]]:
     # Net* equals gross here: credits/refunds are modeled as their own lines, exactly as
-    # Cost Explorer splits them out. ListCost is the on-demand (pre-discount) price; for
-    # on-demand lines it equals unblended, for commitment-covered lines it is higher.
-    # BlendedCost is AWS's consolidated-average measure — equal to unblended on-demand, but
-    # it differs for commitment-covered usage, which is exactly why we ingest it separately.
+    # Cost Explorer splits them out. The discount stack is list >= contracted >= billed:
+    #   ListCost       — public on-demand price, before any negotiated discount.
+    #   ContractedCost — price at the negotiated (contracted) rate, before commitment discounts.
+    #   Unblended      — invoiced amount (after commitment discounts too).
+    # BlendedCost is AWS's consolidated-average measure — differs for commitment-covered usage.
     list_cost = unblended if list_cost is None else list_cost
+    contracted = unblended if contracted is None else contracted
     blended = unblended if blended is None else blended
     return {
         "UnblendedCost": {"Amount": _money(unblended), "Unit": currency},
@@ -217,8 +224,15 @@ def _metrics(
         "AmortizedCost": {"Amount": _money(amortized), "Unit": currency},
         "NetAmortizedCost": {"Amount": _money(amortized), "Unit": currency},
         "ListCost": {"Amount": _money(list_cost), "Unit": currency},
+        "ContractedCost": {"Amount": _money(contracted), "Unit": currency},
         "UsageQuantity": {"Amount": _money(usage), "Unit": unit},
     }
+
+
+def _list_price(billed: Decimal, config: GeneratorConfig) -> Decimal:
+    """Public list price implied by a negotiated (billed) amount: list = billed / (1 - edp)."""
+    factor = Decimal(str(1 - config.negotiated_discount))
+    return billed / factor if factor > 0 else billed
 
 
 def _group(
@@ -266,19 +280,21 @@ def _savings_plan_groups(
       and it amortizes into the covered usage above so amortized totals stay consistent.
     """
     usage = Decimal(str(_daily_usage(_SP_SPEC, day_index, day, config)))
-    on_demand = _SP_SPEC.rate * usage  # what the same usage would cost on-demand (ListCost)
+    on_demand = _SP_SPEC.rate * usage  # negotiated on-demand cost this usage displaces
     amortized = on_demand * Decimal(str(1 - config.sp_discount))  # SP cost for this usage
     fee = amortized  # recurring fee equals the amortized covered cost (consistent totals)
     return [
         _group(
             [_SP_SPEC.key, "SavingsPlanCoveredUsage"],
-            # Billed $0 (covered), list = on-demand, effective = amortized SP cost.
+            # Billed $0 (covered); contracted = negotiated on-demand, list = public price
+            # above it, effective = amortized SP cost.
             _metrics(
                 Decimal("0"),
                 amortized,
                 usage,
                 _SP_SPEC.unit,
-                list_cost=on_demand,
+                list_cost=_list_price(on_demand, config),
+                contracted=on_demand,
                 blended=amortized,
             ),
             tags=_SP_SPEC.tags(),
@@ -311,7 +327,17 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
             groups.append(
                 _group(
                     [spec.key, "Usage"],
-                    _metrics(unblended, amortized, usage, spec.unit, blended=blended),
+                    # On-demand: billed at the negotiated rate, so contracted == billed and
+                    # the public list price sits above both.
+                    _metrics(
+                        unblended,
+                        amortized,
+                        usage,
+                        spec.unit,
+                        list_cost=_list_price(unblended, config),
+                        contracted=unblended,
+                        blended=blended,
+                    ),
                     tags=spec.tags(),
                 )
             )

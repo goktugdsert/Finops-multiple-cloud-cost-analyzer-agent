@@ -18,6 +18,7 @@ from mcca.budgets.service import spend_vs_budget
 from mcca.config import get_settings
 from mcca.detection.service import detect
 from mcca.forecasting.service import forecast_daily_spend
+from mcca.governance.service import evaluate_policies
 from mcca.logging import configure_logging
 from mcca.queries.registry import run_query
 from mcca.routing.router import route
@@ -54,6 +55,7 @@ def build_report_data(
         repo, last_month, end, prior_start=prior_month, prior_end=last_month, top_n=5
     )
     routing = route(repo, start, end, budget_month=end)
+    policy_violations = evaluate_policies(repo, start, end)
     providers = run_query(repo, "spend_by_provider", window).rows
     # Recent daily history (tail of the window) so the forecast chart is a continuous
     # daily curve, not just an aggregate — grounded in the daily_spend query.
@@ -143,6 +145,10 @@ def build_report_data(
                 "recommendation": f.recommendation,
             }
             for f in routing.findings[:6]
+        ],
+        "policy": [
+            {"severity": v.severity, "summary": v.summary, "recommendation": v.recommendation}
+            for v in policy_violations
         ],
     }
 
@@ -592,6 +598,29 @@ def render_html(data: dict[str, Any]) -> str:
     else:
         findings_panel = ""
 
+    policy = data.get("policy", [])
+    if policy:
+        sev_color = {"HIGH": "var(--crit)", "MEDIUM": "var(--serious)", "LOW": "var(--good)"}
+        policy_rows = "".join(
+            f'<tr><td><span class="badge"><span class="dot" '
+            f'style="background:{sev_color.get(v["severity"], "var(--good)")}"></span>'
+            f"{escape(v['severity'])}</span></td>"
+            f"<td>{escape(v['summary'])}<div class='foot' style='margin:3px 0 0'>&rarr; "
+            f"{escape(v['recommendation'])}</div></td></tr>"
+            for v in policy
+        )
+        n = len(policy)
+        policy_panel = (
+            f'<div class="card"><div class="card-h">'
+            f"<h2>Policy compliance ({n} violation{'s' if n != 1 else ''})</h2></div>"
+            "<table><thead><tr><th>Severity</th><th>Violation &amp; recommendation</th></tr>"
+            f"</thead><tbody>{policy_rows}</tbody></table>"
+            "<div class='foot'>Governance flags policy breaches — recommend-only; "
+            "a human acts, nothing is enforced.</div></div>"
+        )
+    else:
+        policy_panel = ""
+
     anomalies = data.get("anomalies", {"spikes": [], "steady": []})
     spike_rows = (
         "".join(
@@ -671,6 +700,7 @@ def render_html(data: dict[str, Any]) -> str:
         "<div class='card'><div class='card-h'><h2>Top services by usage cost</h2></div>"
         f"{_mag_bars(services)}</div>"
         f"{findings_panel}"
+        f"{policy_panel}"
         f"{drivers_panel}"
         f"{anomaly_panel}"
         f"{mom_panel}"

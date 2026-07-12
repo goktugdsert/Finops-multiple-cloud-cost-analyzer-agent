@@ -119,6 +119,27 @@ def test_list_and_blended_metrics_present_on_usage() -> None:
     assert Decimal(m["BlendedCost"]["Amount"]) != Decimal(m["UnblendedCost"]["Amount"])
 
 
+def test_contracted_below_list_and_equals_billed_on_demand() -> None:
+    day0 = build_response(START, START.replace(day=2))["ResultsByTime"][0]
+    s3 = _usage_groups(day0)["Amazon Simple Storage Service"]  # on-demand, no commitment
+    m = s3["Metrics"]
+    billed = Decimal(m["UnblendedCost"]["Amount"])
+    contracted = Decimal(m["ContractedCost"]["Amount"])
+    list_c = Decimal(m["ListCost"]["Amount"])
+    # On-demand at the negotiated rate: contracted == billed, and public list sits above.
+    assert contracted == billed
+    assert list_c > contracted
+
+
+def test_no_negotiated_discount_collapses_list_to_billed() -> None:
+    cfg = GeneratorConfig(negotiated_discount=0.0)
+    day0 = build_response(START, START.replace(day=2), cfg)["ResultsByTime"][0]
+    m = _usage_groups(day0)["Amazon Simple Storage Service"]["Metrics"]
+    # With no enterprise discount, list == contracted == billed.
+    assert Decimal(m["ListCost"]["Amount"]) == Decimal(m["UnblendedCost"]["Amount"])
+    assert Decimal(m["ContractedCost"]["Amount"]) == Decimal(m["UnblendedCost"]["Amount"])
+
+
 def test_savings_plan_can_be_disabled() -> None:
     resp = build_response(START, START.replace(day=2), GeneratorConfig(savings_plan=False))
     record_types = {g["Keys"][1] for g in resp["ResultsByTime"][0]["Groups"]}

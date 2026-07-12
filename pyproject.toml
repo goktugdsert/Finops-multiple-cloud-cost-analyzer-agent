@@ -48,6 +48,8 @@ mcca-web = "mcca.surface.web:main"
 mcca-eval = "mcca.eval.runner:main"
 # Deterministic numeric-faithfulness eval: every fixed query returns fixture-exact figures.
 mcca-eval-numeric = "mcca.eval.numeric:main"
+# Human approval CLI: review recommendations and record approve/dismiss/snooze decisions.
+mcca-review = "mcca.optimization.cli:main"
 
 [dependency-groups]
 dev = [

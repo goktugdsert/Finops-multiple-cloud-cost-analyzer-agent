@@ -82,6 +82,8 @@ def test_normalize_to_focus(rows) -> None:
     assert vm.provider_name == "Azure"
     assert vm.billed_cost == Decimal("96.0")
     assert vm.effective_cost == Decimal("67.2")
+    # No separate negotiated tier modeled for Azure: contracted defaults to the invoiced amount.
+    assert vm.contracted_cost == Decimal("96.0")
     assert vm.billing_currency == "USD"
     assert vm.billing_account_id == "sub-123"
     assert vm.sub_account_name == "platform-rg"

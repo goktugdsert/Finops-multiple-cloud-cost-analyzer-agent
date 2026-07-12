@@ -54,6 +54,10 @@ def normalize_row(row: AzureCostRow, billing_account_id: str = "unknown") -> Foc
     return FocusRecord(
         billed_cost=row.cost,
         effective_cost=row.amortized_cost,
+        # No separate list/negotiated tier is modeled for Azure yet; contracted (pre-commitment,
+        # negotiated) defaults to the invoiced amount. The commitment discount shows via
+        # effective_cost (AmortizedCost) < billed.
+        contracted_cost=row.cost,
         billing_currency=row.currency,
         billing_account_id=billing_account_id,
         sub_account_id=row.resource_group,

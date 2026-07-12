@@ -15,10 +15,11 @@ an owner with a recommended action. It **recommends only; it never touches infra
 
 ## Status
 
-**v1 is feature-complete and validated on synthetic data.** All three clouds, the full
-FinOps loop, both pillars (unified visibility + predictive budgeting), a web chat UI, a
-static HTML report, evals, and Langfuse tracing. **153 tests pass** (+1 intentionally
-skipped live-credential check).
+**v1 is feature-complete and validated on synthetic data**, plus a v2 layer (allocation,
+governance, an approval workflow, and a qualitative RAG knowledge base — see
+[Beyond the loop](#beyond-the-loop-v2)). All three clouds, the full FinOps loop, both pillars
+(unified visibility + predictive budgeting), an interactive dashboard, evals, and Langfuse
+tracing. **206 tests pass** (+1 intentionally skipped live-credential check).
 
 **Honest scope:** there are no real cloud accounts — the agent runs on a deterministic
 **synthetic** dataset that emits each cloud's native billing shape. "Validated" means
@@ -42,6 +43,27 @@ measure → attribute → detect → explain → forecast → track-vs-budget �
 - **Forecast** future daily spend (SARIMAX, with an uncertainty band always shown).
 - **Track** month-to-date + forecast against a stored budget.
 - **Route** findings to an owner with a recommended action (recommend-only).
+
+## Beyond the loop (v2)
+
+Built on the same trust boundary — every number still comes from a deterministic query:
+
+- **Cost allocation** — spread the shared/`unattributed` pool onto teams for a *fully-loaded*
+  cost (proportional / even / weighted). A derived view; the warehouse is never rewritten and
+  shares reconcile to the pool exactly. Tool: `allocate_shared_spend`.
+- **Governance policy engine** — declarative policies (untagged-spend limits, per-team caps,
+  restricted services) evaluated against the warehouse, flagging violations with a recommended
+  action. Recommend-only, never enforced. Tool: `check_policies`.
+- **Approval workflow** — findings + violations become reviewable recommendations; a human
+  records a decision (approve / dismiss / snooze) via `uv run mcca-review`, persisted per
+  recommendation. **A decision records intent only — nothing is executed.** The agent can
+  *report* status (`review_recommendations`) but cannot approve.
+- **Knowledge base (RAG)** — a curated, qualitative FinOps knowledge base for concept/policy
+  questions (`search_knowledge`). **Strictly qualitative — never a source of a cost figure**
+  (a test asserts the corpus contains no dollar amounts).
+
+Permanently out of scope by principle: auto-actioning against infrastructure (read-only), and
+open-ended text-to-SQL (numbers always stay behind the fixed, validated queries).
 
 ## Trust boundary
 
@@ -87,9 +109,10 @@ uv run mcca-seed                 # load ~9 months of synthetic AWS+Azure+GCP dat
 ## Running it
 
 ```bash
-uv run mcca-web            # interactive chat UI + report at http://127.0.0.1:8000
+uv run mcca-web            # interactive chat UI + dashboard at http://127.0.0.1:8000
 uv run mcca "How much did we spend in total from 2026-01-01 to 2026-04-01?"
-uv run mcca-report        # generate a self-contained HTML cost report
+uv run mcca-report        # generate a self-contained HTML dashboard
+uv run mcca-review        # review recommendations; approve/dismiss/snooze (human decisions)
 uv run mcca-eval          # agent eval: tool selection + prose numeric faithfulness (needs an LLM)
 uv run mcca-eval-numeric  # deterministic: every fixed query returns fixture-exact figures (no LLM)
 ```
@@ -102,6 +125,9 @@ uv run mcca-eval-numeric  # deterministic: every fixed query returns fixture-exa
 - `Why did spend change from May to June 2026?`
 - `Forecast our daily spend for the next 30 days.`
 - `What cost findings should we act on, and who owns them?`
+- `What's each team's fully-loaded cost including shared spend, Jan–Apr 2026?`
+- `Are we breaching any cost governance policies this year?`
+- `Explain the difference between blended and unblended cost.`
 
 ## LLM provider (config-driven, swappable)
 

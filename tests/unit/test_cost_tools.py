@@ -24,6 +24,10 @@ EXPECTED_TOOL_NAMES = {
     "spend_vs_budget",
     "explain_change",
     "route_findings",
+    "allocate_shared_spend",
+    "check_policies",
+    "review_recommendations",
+    "search_knowledge",
 }
 
 
@@ -102,6 +106,77 @@ def test_tool_returns_json_safe_result_with_provenance() -> None:
     assert out["rows"][0]["billed_cost"] == "123.45"  # Decimal serialized to str
     assert isinstance(out["rows"][0]["billed_cost"], str)
     assert repo.statement is not None
+
+
+def test_allocation_tool_returns_fully_loaded_team_cost() -> None:
+    # spend_by_team rows: two real teams + a shared 'unattributed' pool of $100.
+    rows = [
+        {"x_team": "platform", "amount": Decimal("300")},
+        {"x_team": "data", "amount": Decimal("100")},
+        {"x_team": "unattributed", "amount": Decimal("100")},
+    ]
+    tool = _tool(get_cost_tools(FakeRepo(rows)), "allocate_shared_spend")
+    out = tool.invoke({"start": "2026-01-01", "end": "2026-04-01"})
+
+    assert out["method"] == "proportional"
+    assert out["shared_pool"] == "100.00"
+    assert out["unallocated"] == "0.00"
+    by_team = {t["team"]: t for t in out["teams"]}
+    # Proportional: platform gets 3/4 of the pool, data 1/4.
+    assert by_team["platform"]["allocated"] == "75.00"
+    assert by_team["data"]["allocated"] == "25.00"
+    assert by_team["platform"]["total"] == "375.00"
+    # Allocated shares reconcile to the pool exactly (nothing lost or invented).
+    allocated = sum(Decimal(t["allocated"]) for t in out["teams"])
+    assert allocated == Decimal("100.00")
+
+
+def test_allocation_tool_weighted_method_uses_supplied_weights() -> None:
+    rows = [
+        {"x_team": "platform", "amount": Decimal("300")},
+        {"x_team": "data", "amount": Decimal("100")},
+        {"x_team": "unattributed", "amount": Decimal("100")},
+    ]
+    tool = _tool(get_cost_tools(FakeRepo(rows)), "allocate_shared_spend")
+    out = tool.invoke(
+        {
+            "start": "2026-01-01",
+            "end": "2026-04-01",
+            "method": "weighted",
+            "weights": {"platform": 1, "data": 3},  # data gets 3/4 despite less direct spend
+        }
+    )
+    by_team = {t["team"]: t for t in out["teams"]}
+    assert by_team["data"]["allocated"] == "75.00"
+    assert by_team["platform"]["allocated"] == "25.00"
+    assert out["unallocated"] == "0.00"  # weights supplied -> fully allocated, not stranded
+
+
+def test_governance_tool_flags_policy_violations() -> None:
+    # Rows carry both x_team and service_name so the default policies can evaluate.
+    rows = [
+        {"x_team": "platform", "service_name": "Amazon EC2", "amount": Decimal("200000")},
+        {"x_team": "unattributed", "service_name": "Tax", "amount": Decimal("1000")},
+    ]
+    tool = _tool(get_cost_tools(FakeRepo(rows)), "check_policies")
+    out = tool.invoke({"start": "2026-01-01", "end": "2026-04-01"})
+
+    # platform ($200k) breaches the default $100k team cap.
+    caps = [v for v in out["violations"] if v["kind"] == "team_cap"]
+    assert caps and caps[0]["scope"] == "platform"
+    assert caps[0]["severity"] == "MEDIUM"
+    assert "recommendation" in caps[0]
+
+
+def test_knowledge_tool_returns_qualitative_passages() -> None:
+    # search_knowledge needs no repo/DB — it's over the curated corpus.
+    tool = _tool(get_cost_tools(FakeRepo([])), "search_knowledge")
+    out = tool.invoke({"query": "explain blended vs unblended cost"})
+    assert out["passages"], "expected at least one relevant passage"
+    top = out["passages"][0]
+    assert "cost" in top["text"].lower()
+    # A knowledge passage never carries a dollar figure (RAG is not a number source).
+    assert "$" not in top["text"]
 
 
 def test_tool_rejects_invalid_metric() -> None:

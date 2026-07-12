@@ -141,3 +141,25 @@ budgets = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("scope_type", "scope_value", name="uq_budget_scope"),
 )
+
+# Human decisions on recommendations (the approval workflow). Recommendations themselves are
+# always recomputed live/grounded from routing + governance; only the DECISION is persisted
+# here, keyed on the recommendation's stable identity. A decision records intent only — it is
+# NEVER an action against infrastructure. Columns beyond status are an audit snapshot.
+recommendation_decisions = Table(
+    "recommendation_decisions",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("rec_key", Text, nullable=False),
+    Column("status", Text, nullable=False),  # APPROVED | DISMISSED | SNOOZED
+    Column("source", Text, nullable=True),  # finding | policy (snapshot)
+    Column("kind", Text, nullable=True),
+    Column("severity", Text, nullable=True),
+    Column("scope", Text, nullable=True),
+    Column("summary", Text, nullable=True),
+    Column("action", Text, nullable=True),
+    Column("decided_by", Text, nullable=True),
+    Column("note", Text, nullable=True),
+    Column("decided_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("rec_key", name="uq_recommendation_decisions_key"),
+)

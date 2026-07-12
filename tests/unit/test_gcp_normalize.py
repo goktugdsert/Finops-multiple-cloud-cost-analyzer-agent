@@ -64,6 +64,9 @@ def test_normalize_nets_credits(rows) -> None:
     assert gce.billed_cost == Decimal("70.0")  # 100 + (-30)
     assert gce.effective_cost == Decimal("70.0")
     assert gce.list_cost == Decimal("100.0")  # gross before credits
+    # No negotiated tier modeled for GCP: contracted == gross list, above the net billed.
+    assert gce.contracted_cost == Decimal("100.0")
+    assert gce.contracted_cost >= gce.billed_cost
     assert gce.sub_account_id == "platform-prod"
     assert gce.charge_period_start == datetime(2026, 6, 1, tzinfo=UTC)
     assert gce.x_team == "platform"
