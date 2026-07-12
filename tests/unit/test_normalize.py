@@ -122,6 +122,80 @@ def test_untagged_line_stays_unattributed() -> None:
     assert record.tags is None
 
 
+def _row(record_type: str, metrics: dict) -> RawCostRow:
+    return RawCostRow(
+        start="2026-06-01",
+        end="2026-06-02",
+        groups={"SERVICE": "Amazon Elastic Compute Cloud - Compute", "RECORD_TYPE": record_type},
+        metrics=metrics,
+        estimated=False,
+    )
+
+
+def test_savings_plan_covered_usage_normalizes_with_commitment_metadata() -> None:
+    # A SavingsPlanCoveredUsage line: billed $0 (covered), list = on-demand, effective = SP.
+    row = _row(
+        "SavingsPlanCoveredUsage",
+        {
+            "NetUnblendedCost": {"Amount": "0.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "21.00", "Unit": "USD"},
+            "ListCost": {"Amount": "28.80", "Unit": "USD"},
+            "BlendedCost": {"Amount": "21.00", "Unit": "USD"},
+        },
+    )
+    rec = normalize_row(row)
+    assert rec.charge_category == "Usage"  # covered usage is still Usage
+    assert rec.billed_cost == Decimal("0.00")
+    assert rec.list_cost == Decimal("28.80")  # on-demand price it displaced
+    assert rec.list_cost > rec.billed_cost  # the SP discount is now representable
+    assert rec.commitment_discount_type == "Savings Plan"
+    assert rec.commitment_discount_category == "Usage"
+    assert rec.commitment_discount_status == "Used"
+
+
+def test_savings_plan_recurring_fee_is_a_purchase() -> None:
+    row = _row(
+        "SavingsPlanRecurringFee",
+        {
+            "NetUnblendedCost": {"Amount": "21.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "0.00", "Unit": "USD"},
+        },
+    )
+    rec = normalize_row(row)
+    assert rec.charge_category == "Purchase"
+    assert rec.commitment_discount_type == "Savings Plan"
+    assert rec.commitment_discount_category == "Spend"
+
+
+def test_blended_cost_is_captured_but_never_billed() -> None:
+    # RI-covered usage: blended (consolidated avg) differs from the unblended billed amount.
+    row = _row(
+        "Usage",
+        {
+            "NetUnblendedCost": {"Amount": "100.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "72.00", "Unit": "USD"},
+            "BlendedCost": {"Amount": "72.00", "Unit": "USD"},
+        },
+    )
+    rec = normalize_row(row)
+    assert rec.billed_cost == Decimal("100.00")  # billed is ALWAYS unblended
+    assert rec.x_blended_cost == Decimal("72.00")  # blended captured separately
+    assert rec.x_blended_cost != rec.billed_cost
+
+
+def test_on_demand_line_has_no_commitment_metadata() -> None:
+    row = _row(
+        "Usage",
+        {
+            "NetUnblendedCost": {"Amount": "10.00", "Unit": "USD"},
+            "NetAmortizedCost": {"Amount": "10.00", "Unit": "USD"},
+        },
+    )
+    rec = normalize_row(row)
+    assert rec.commitment_discount_type is None
+    assert rec.commitment_discount_status is None
+
+
 def test_billing_period_rolls_over_december() -> None:
     row = RawCostRow(
         start="2026-12-15",

@@ -43,6 +43,64 @@ class Forecast:
     points: list[ForecastPoint]
 
 
+@dataclass(frozen=True)
+class ForecastNarration:
+    """Deterministic narration aids so the LLM can't mis-tell a correct forecast.
+
+    Hands the model the weekday-vs-weekend direction as actual numbers (so it can't invert
+    it), an explicit interval percentage (so it can't mislabel it), and a plain statement of
+    what seasonality the model does — and does NOT — capture (so it can't invent a holiday
+    or calendar effect the model never modeled).
+    """
+
+    interval_pct: int
+    seasonality: str
+    weekday_mean: Decimal
+    weekend_mean: Decimal
+    higher: str  # "weekdays" | "weekends" | "about the same"
+
+
+def _mean(values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("0.00")
+    return (sum(values, Decimal("0")) / len(values)).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+
+def summarize_forecast(forecast: Forecast) -> ForecastNarration:
+    """Summarize a Forecast into narration guards (pure function over the points)."""
+    weekday = [p.yhat for p in forecast.points if p.date.weekday() < 5]
+    weekend = [p.yhat for p in forecast.points if p.date.weekday() >= 5]
+    weekday_mean, weekend_mean = _mean(weekday), _mean(weekend)
+
+    if not weekday or not weekend:
+        higher = "weekdays" if weekday else "weekends" if weekend else "about the same"
+    elif weekday_mean > weekend_mean:
+        higher = "weekdays"
+    elif weekend_mean > weekday_mean:
+        higher = "weekends"
+    else:
+        higher = "about the same"
+
+    if "SARIMAX" in forecast.model:
+        seasonality = (
+            "weekly (7-day) cycle only — the model has NO awareness of holidays or one-off "
+            "calendar events; never attribute a value to one"
+        )
+    else:
+        seasonality = (
+            "linear trend only — no weekly seasonality and NO holiday/calendar awareness; "
+            "never attribute a value to a holiday"
+        )
+
+    return ForecastNarration(
+        interval_pct=int(round(forecast.interval * 100)),
+        seasonality=seasonality,
+        weekday_mean=weekday_mean,
+        weekend_mean=weekend_mean,
+        higher=higher,
+    )
+
+
 _CENTS = Decimal("0.01")
 
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0003_line_reconciliation"
@@ -30,20 +29,22 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "focus_costs",
-        sa.Column(
-            "is_estimated", sa.Boolean(), nullable=False, server_default=sa.text("false")
-        ),
+    # Idempotent: migration 0001 runs metadata.create_all, which builds the CURRENT schema
+    # (already including these columns) on a fresh DB, so guard every step with IF [NOT]
+    # EXISTS. On an older DB the columns are genuinely added here.
+    op.execute(
+        "ALTER TABLE focus_costs "
+        "ADD COLUMN IF NOT EXISTS is_estimated BOOLEAN NOT NULL DEFAULT false"
     )
-    # Add nullable, backfill existing rows with a unique placeholder, then enforce NOT NULL.
-    op.add_column("focus_costs", sa.Column("line_key", sa.Text(), nullable=True))
+    op.execute("ALTER TABLE focus_costs ADD COLUMN IF NOT EXISTS line_key TEXT")
+    # Backfill any pre-existing rows with a unique placeholder, then enforce NOT NULL/UNIQUE.
     op.execute("UPDATE focus_costs SET line_key = md5(id::text) WHERE line_key IS NULL")
-    op.alter_column("focus_costs", "line_key", nullable=False)
-    op.create_unique_constraint("uq_focus_costs_line_key", "focus_costs", ["line_key"])
+    op.execute("ALTER TABLE focus_costs ALTER COLUMN line_key SET NOT NULL")
+    op.execute("ALTER TABLE focus_costs DROP CONSTRAINT IF EXISTS uq_focus_costs_line_key")
+    op.execute("ALTER TABLE focus_costs ADD CONSTRAINT uq_focus_costs_line_key UNIQUE (line_key)")
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_focus_costs_line_key", "focus_costs", type_="unique")
-    op.drop_column("focus_costs", "line_key")
-    op.drop_column("focus_costs", "is_estimated")
+    op.execute("ALTER TABLE focus_costs DROP CONSTRAINT IF EXISTS uq_focus_costs_line_key")
+    op.execute("ALTER TABLE focus_costs DROP COLUMN IF EXISTS line_key")
+    op.execute("ALTER TABLE focus_costs DROP COLUMN IF EXISTS is_estimated")

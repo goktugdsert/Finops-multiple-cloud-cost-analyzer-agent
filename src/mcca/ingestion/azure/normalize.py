@@ -28,6 +28,13 @@ CHARGE_TYPE_TO_CATEGORY: dict[str, str] = {
     "Reservation": "Purchase",
 }
 
+# Azure ChargeType -> FOCUS commitment_discount_type, for reservation/savings-plan charges.
+COMMITMENT_BY_CHARGE_TYPE: dict[str, str] = {
+    "Reservation": "Reserved Instance",
+    "UnusedReservation": "Reserved Instance",
+    "UnusedSavingsPlan": "Savings Plan",
+}
+
 
 def _billing_period(day: datetime) -> tuple[datetime, datetime]:
     start = day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -57,6 +64,8 @@ def normalize_row(row: AzureCostRow, billing_account_id: str = "unknown") -> Foc
         charge_period_end=charge_end,
         charge_category=CHARGE_TYPE_TO_CATEGORY.get(row.charge_type, "Usage"),
         charge_description=row.charge_type,
+        commitment_discount_type=COMMITMENT_BY_CHARGE_TYPE.get(row.charge_type),
+        commitment_discount_status=("Unused" if row.charge_type == "UnusedReservation" else None),
         provider_name="Azure",
         service_name=row.service,
         consumed_quantity=row.quantity,

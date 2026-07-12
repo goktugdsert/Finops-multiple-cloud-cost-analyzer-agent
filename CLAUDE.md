@@ -99,13 +99,44 @@ clouds (handle discounts, credits, amortization, blended vs unblended).
 
 ---
 
-# IMPLEMENTATION STATUS (as-built) — updated end of build
+# IMPLEMENTATION STATUS (as-built) — updated after the synthetic-data hardening pass
 
-**TL;DR:** v1 is **feature-complete and committed**. All 7 build steps done, all 3
-clouds, the full loop, both pillars, report + web chat UI + eval + Langfuse tracing.
-**113 tests passing, ruff clean.** Runs on **synthetic data only** (no real cloud
-accounts — this is a permanent project decision, see "Deviations"). The only things
-NOT built require real cloud data.
+**TL;DR:** v1 is **feature-complete and validated on synthetic data.** All 7 build steps
+done, all 3 clouds, the full loop, both pillars, report + web chat UI + eval + Langfuse
+tracing. **164 tests passing (+1 explicitly-skipped live check), ruff clean, CI on push.**
+Runs on **synthetic data only** (no real cloud accounts — a standing project decision).
+
+Honest framing (do not overstate): "validated" means **provably correct against our own
+synthetic ground truth**, not reconciled to a real cloud bill. Three things remain genuine
+**open v1 debts that require real billing data** — they are NOT done and must not be marked
+done: (1) reconcile-to-console, (2) real-console confirmation of the full normalization
+(RI/SP/credits/blended), (3) the live least-privilege access-scoping check. See the
+**"Open v1 debts (require real data)"** section at the bottom. Everything closeable on
+synthetic data has been closed and tested.
+
+## Hardening pass (done on synthetic data — see "Open v1 debts" for what's still blocked)
+- **Estimate→final reconciliation:** ingestion upserts on a natural billing-line key
+  (`FocusRecord.natural_key()`), so re-ingesting a period corrects instead of double-counting
+  and an estimate is overwritten by its final. `is_estimated` + `line_key` columns
+  (migration `0003`). Proven: `tests/integration/test_reconciliation_seed.py`.
+- **Numeric faithfulness:** `eval/numeric.py` (`mcca-eval-numeric`) re-computes every fixed
+  query independently from the raw rows and asserts exact agreement (9/9); `eval/faithfulness.py`
+  flags any dollar figure in an agent answer that traces to no tool output. Proven:
+  `tests/integration/test_numeric_faithfulness_seed.py`, `tests/unit/test_faithfulness.py`.
+- **Completed normalization:** Savings Plan line items + Azure credit/adjustment lines are
+  now emitted and normalized; `commitment_discount_*` columns populated; blended cost captured
+  in `x_blended_cost` (migration `0004`, never billed — billed stays unblended); `list_cost`
+  ingested so list→billed→effective is representable. Proven: `tests/integration/test_messy_cases_seed.py`.
+- **Access scoping:** read-only session-factory precedence, read-only `ce`-only client, and a
+  structural "no infra-mutating call / no cloud SDK in agent+tools" guarantee are tested.
+  Proven: `tests/unit/test_access_scoping.py` (live cred check skipped — see debts).
+- **Forecast-narration guardrail + runtime faithfulness guard:** the confirmed forecast
+  mis-narration (weekday/weekend inversion, hallucinated holiday, wrong interval %) is
+  neutralized by `summarize_forecast` + prompt rules; and every live `mcca-web`/`mcca` answer
+  is checked so a fabricated figure is surfaced, not silently trusted. Proven:
+  `tests/unit/test_forecasting.py`, `tests/unit/test_cost_tools.py`, `tests/unit/test_web.py`.
+- **CI + README:** GitHub Actions runs lint + the full migration chain + the whole suite on
+  every push/PR; README rewritten from the old scaffold stub to the finished project.
 
 ## Build order — all done
 1. ✅ Access + FOCUS schema (`warehouse/schema.py`: `focus_costs` + `budgets` tables).
@@ -143,8 +174,9 @@ src/mcca/
   analysis/     drivers.py                          # explain-why (cost drivers)
   routing/      router.py                           # findings -> owner + recommendation
   surface/      report.py(HTML) web.py(FastAPI chat)
-  eval/         dataset.py runner.py
-migrations/  0001_focus_schema.py 0002_budgets.py
+  eval/         dataset.py runner.py(tool-selection + faithfulness) numeric.py faithfulness.py
+migrations/  0001_focus_schema 0002_budgets 0003_line_reconciliation 0004_blended_cost
+             # 0003/0004 are idempotent (0001 create_all builds current schema on fresh DBs)
 ```
 
 ## Registered queries (queries/registry.py)
@@ -170,54 +202,101 @@ qwen3.5:9b** (local, free, unlimited, ~80 s/answer on a 6 GB GPU). Gemini
 
 ## Entry points / how to run
 `docker compose up -d` → `uv run alembic upgrade head` → `uv run mcca-seed` (all 3
-clouds, ~$232k, sets a $9k budget). Then: `uv run mcca-web` (chat UI at
-127.0.0.1:8000), `uv run mcca "question"` (CLI), `uv run mcca-report` (HTML),
-`uv run mcca-eval` (tool-selection score), `uv run pytest` (113 tests).
+clouds, sets a $9k budget). Then: `uv run mcca-web` (chat UI at 127.0.0.1:8000),
+`uv run mcca "question"` (CLI), `uv run mcca-report` (HTML), `uv run mcca-eval`
+(tool-selection + prose faithfulness), `uv run mcca-eval-numeric` (deterministic
+fixture-exact query check — no LLM), `uv run pytest` (164 tests, +1 skipped live check).
 `mcca-seed --cloud {aws,azure,gcp,all}`. NOTE: `uv run pytest` DROPS the seeded data
-(integration fixtures drop_all at teardown) — re-seed afterward.
+(integration fixtures drop_all at teardown) — re-seed afterward. Re-ingestion is now
+idempotent (upsert), so `mcca-seed` can be re-run without double-counting. Both `mcca-web`
+and `mcca` run the **runtime faithfulness guard** on every answer (see below).
+
+## CI + README
+- **CI**: `.github/workflows/ci.yml` runs on every push/PR — ruff (lint+format), the full
+  `0001→0004` migration chain against a fresh Postgres service, and the whole test suite
+  (unit + integration via a scripted model; no cloud creds or LLM key needed).
+- **README.md**: rewritten from the old scaffold stub to reflect the finished project
+  (what-it-is, trust boundary, setup, run commands, demo prompts, honest debt callout).
 
 ## Observability
 Langfuse (`tracing.py`), config-driven via `MCCA_LANGFUSE_*`, off by default; enabled
 in the dev `.env`. Applied at both graph.invoke sites (CLI + web) with flush on exit.
 
-## Reliability work done (tool selection / grounding)
+## Reliability work done (tool selection / grounding / narration)
 - System prompt (`agent/prompts.py`): tool-selection rules (aggregates vs per-service),
   service-name disambiguation ("compute" per cloud), "ask if ambiguous".
 - Sharpened tool descriptions (total_spend/monthly_spend = ALL-services totals).
 - Dynamic **service catalog** injected into the prompt (exact names, never invent).
 - Wide test vs qwen3.5:9b scored **11/11 tool selection**.
+- **Forecast-narration guardrail** (`forecasting/model.py summarize_forecast`): the
+  `forecast_spend` tool now hands the model the weekday/weekend direction as numbers, an
+  explicit `interval_pct`, per-point weekday labels, and a `seasonality` caveat; the prompt
+  forbids attributing a value to a holiday/calendar event. Neutralizes the confirmed
+  weekday/weekend-inversion + hallucinated-holiday + interval-mislabel bug structurally.
+- **Runtime faithfulness guard** (`eval/faithfulness.py check_messages/warning_line`): every
+  `mcca-web` and `mcca` answer is checked; any dollar figure not traceable to a tool output
+  is logged and surfaced to the user as a caveat (not silently trusted).
 
 ## KNOWN ISSUES / nits (all narration, never fabricated numbers)
 The "numbers only from tools" guarantee HOLDS — every figure matches the deterministic
-query/tool. But the local 9B model sometimes **mis-narrates** correct numbers:
-- **Forecast narration bug (confirmed):** on the 30-day forecast it (a) INVERTED
-  weekday/weekend — real: weekdays HIGH (~$1,060/day), weekends LOW (~$870); and
-  (b) HALLUCINATED a "July 4th holiday / calendar effect". Our SARIMAX has ONLY weekly
-  (7-day) seasonality — no holiday awareness. Numbers were exact; the story was wrong.
-- Occasionally returns an **empty final answer** (tool ran, no narration) — retry fixes.
-- Sometimes mislabels the forecast interval (it's **80%**, said 90%).
-These drop sharply with a stronger model. NOT yet fixed.
+query/tool. Prior local-9B mis-narration issues are now mostly addressed:
+- **Forecast weekday/weekend inversion + hallucinated "July 4th holiday" — GUARDED.** The
+  `forecast_spend` output now states the direction, interval %, and a no-holiday seasonality
+  caveat as data; the prompt forbids calendar-event stories (see Reliability work).
+- **Forecast interval mislabel (said 90%, is 80%) — FIXED.** `interval_pct` is returned
+  explicitly.
+- **Fabricated dollar figures in prose — GUARDED at runtime.** The faithfulness guard flags
+  any answer figure not traceable to a tool (web + CLI).
+- **Empty final answer (tool ran, no narration) — STILL OPEN.** Occasional; a retry fixes it.
+  Could add a one-shot retry when the final message is empty. Drops sharply with a stronger
+  model.
+- **`contracted_cost` still always NULL.** `list_cost` (pre-discount) is now populated, but
+  the negotiated-rate tier is not modeled — the one FOCUS cost measure left unpopulated.
 
-## WHAT'S MISSING
-Requires real cloud accounts (out of scope by decision — synthetic-only):
-- Real ingestion **clients** are `NotImplementedError` stubs (aws/azure/gcp `client.py`).
-  Real path = swap the synthetic client for a real SDK client; normalize/loader unchanged.
-- **Console validation** (match real Cost Explorer/Cost Management/BigQuery exactly) —
-  RETIRED as a goal (no accounts). Synthetic data validates plumbing + math, not real $$.
-- **CUR / line-item** granularity (resource-level, richer tags) — CE/Query/export
-  aggregated shapes used instead.
+## Open v1 debts (require real data) — NOT done, do not mark done
+These are unverifiable by construction until a real billing account exists. They are
+genuine open debts to close **the instant real billing data is available**, not retired
+goals — pretending otherwise breaks the core "provably correct numbers" bar.
 
-Optional polish (no real data needed, NOT done):
-1. Forecast-narration guardrail: prompt the agent that the model captures only weekly
-   seasonality (no holidays) + read weekend/weekday direction from values; and enrich
-   `forecast_spend` output with day-of-week + interval% so it can't mis-narrate.
-2. CI (GitHub Actions to run tests on push).
-3. README (what-it-is / how-to-run / demo prompts).
-4. `qwen3.5:4b` as a faster local option.
+1. **Reconcile-to-console (row 2 of the audit) — BLOCKED on real data.** No figure has been
+   checked against a real Cost Explorer / Cost Management / BigQuery bill. What exists is
+   internal consistency (`total == Σ categories`) and fixture-exact numeric faithfulness
+   (`mcca-eval-numeric`, 9/9) — provably correct against *our synthetic ground truth*, which
+   is NOT a real invoice. To close: ingest one real account's period and assert the warehouse
+   totals match the console exactly.
+2. **Full-normalization confirmation (row 1) — BLOCKED on real data.** RI/SP/credits/blended
+   are now emitted, normalized, and fixture-tested end-to-end (`test_messy_cases_seed.py`).
+   Still unconfirmed: that these figures and line-item mechanics match a real provider's
+   CUR / Cost Management export. The synthetic RI/SP model is a faithful *shape*, not a
+   validated *amount*. To close: diff normalized output against a real CUR.
+3. **Live access-scoping check (row 7) — BLOCKED on real data.** Config, session-factory
+   precedence, read-only `ce`-only client, and "no infra-mutation / no cloud SDK in
+   agent+tools" are all tested (`test_access_scoping.py`). Unverified: that a real
+   least-privilege IAM role / service principal authenticates and is denied writes at the
+   provider. Marked with a visible skipped test. To close: run against a real reader role.
+
+Also requires real accounts (structural, not a correctness debt):
+- **Real ingestion clients**: AWS `client.py` is a real read-only boto3 factory but has never
+  run against an account; Azure/GCP `client.py` are read-only-intent `NotImplementedError`
+  stubs. Real path = swap the synthetic client for the real SDK client; normalize/loader/
+  query layers are unchanged (proven by the synthetic providers sharing those exact paths).
+- **CUR / line-item** granularity (resource-level, richer tags) — CE/Query/export aggregated
+  shapes used instead.
+
+## Optional polish
+- ✅ **DONE** — Forecast-narration guardrail (see Reliability work).
+- ✅ **DONE** — CI (GitHub Actions, runs on push/PR).
+- ✅ **DONE** — README rewritten for the finished project.
+- ✅ **DONE** — Runtime faithfulness guard (web + CLI).
+- **NOT done (declined for now)** — `qwen3.5:4b` as a faster local option; qwen3.5:9b is the
+  chosen tradeoff.
+- **NOT done (minor)** — empty-final-answer retry; `contracted_cost` population (see nits).
 
 ## Deviations from the original plan
 - **Tracing: Langfuse instead of LangSmith** (user decision).
-- **Synthetic-only** — no real cloud accounts ever; real-console validation retired.
+- **Synthetic-only for now** — no real cloud accounts available; real-console reconciliation
+  is deferred as an explicit **open v1 debt** (see above), NOT retired. It closes the instant
+  real billing data is available.
 - **"Surface" built as an interactive web chat UI** (`mcca-web`, FastAPI) in addition to
   the static HTML report — this is the user-facing "dashboard".
 

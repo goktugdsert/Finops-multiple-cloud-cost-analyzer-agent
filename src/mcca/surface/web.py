@@ -11,6 +11,7 @@ web layer just relays them. Tracing (Langfuse) is applied if enabled.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 from mcca.agent.graph import build_agent_graph
 from mcca.agent.model import build_model
 from mcca.config import get_settings
+from mcca.eval.faithfulness import check_messages, warning_line
 from mcca.logging import configure_logging
 from mcca.surface.report import (
     _first_of_month,
@@ -28,6 +30,8 @@ from mcca.surface.report import (
 )
 from mcca.tracing import flush_tracing, tracing_config
 from mcca.warehouse.postgres import PostgresRepository
+
+logger = logging.getLogger(__name__)
 
 _CHAT_HTML = """
 <div class='panel'>
@@ -147,7 +151,15 @@ def create_app(repo: Any | None = None, model: Any | None = None, months: int = 
                 config=tracing_config(settings),
             )
             flush_tracing(settings)
-            return {"answer": _message_text(result["messages"][-1].content)}
+            messages = result["messages"]
+            answer = _message_text(messages[-1].content)
+            # Runtime faithfulness guard: flag any stated figure not traceable to a tool.
+            untraceable = check_messages(messages)
+            if untraceable:
+                warning = warning_line(untraceable)
+                logger.warning("Faithfulness: untraceable figure(s) %s", untraceable)
+                return {"answer": f"{answer}\n\n{warning}", "warning": warning}
+            return {"answer": answer}
         except Exception as exc:  # noqa: BLE001 - relay the error to the UI
             flush_tracing(settings)
             return {"error": f"{type(exc).__name__}: {exc}"}

@@ -128,6 +128,11 @@ AZURE_ANOMALIES: tuple[tuple[int, str, float], ...] = (
 
 # Monthly reservation purchase (ChargeType Purchase), tagged to the platform team.
 AZURE_MONTHLY_RESERVATION = Decimal("200.00")
+# Monthly refund/credit (ChargeType Refund -> FOCUS Credit; negative) and the cost of
+# reservation hours that went unused (ChargeType UnusedReservation -> FOCUS Adjustment).
+# These exercise Azure's credit/adjustment charge types, previously mapped but never emitted.
+AZURE_MONTHLY_REFUND = Decimal("-120.00")
+AZURE_MONTHLY_UNUSED_RESERVATION = Decimal("35.00")
 
 _COLUMNS: list[dict[str, str]] = [
     {"name": "Cost", "type": "Number"},
@@ -203,21 +208,53 @@ def build_azure_response(
                     spec.tags(),
                 )
             )
-        if day.day == 1 and AZURE_MONTHLY_RESERVATION:
-            fee = AZURE_MONTHLY_RESERVATION
-            rows.append(
-                _row(
-                    fee,
-                    fee,
-                    day,
-                    _VM,
-                    "platform-rg",
-                    "Purchase",
-                    Decimal("0"),
-                    "1 Month",
-                    {"team": "platform", "environment": "prod", "owner": "alice"},
+        if day.day == 1:
+            platform_tags = {"team": "platform", "environment": "prod", "owner": "alice"}
+            if AZURE_MONTHLY_RESERVATION:
+                fee = AZURE_MONTHLY_RESERVATION
+                rows.append(
+                    _row(
+                        fee,
+                        fee,
+                        day,
+                        _VM,
+                        "platform-rg",
+                        "Purchase",
+                        Decimal("0"),
+                        "1 Month",
+                        platform_tags,
+                    )
                 )
-            )
+            if AZURE_MONTHLY_REFUND:
+                refund = AZURE_MONTHLY_REFUND
+                rows.append(
+                    _row(
+                        refund,
+                        refund,
+                        day,
+                        _VM,
+                        "platform-rg",
+                        "Refund",
+                        Decimal("0"),
+                        "1 Month",
+                        platform_tags,
+                    )
+                )
+            if AZURE_MONTHLY_UNUSED_RESERVATION:
+                unused = AZURE_MONTHLY_UNUSED_RESERVATION
+                rows.append(
+                    _row(
+                        unused,
+                        unused,
+                        day,
+                        "Azure Reservations",
+                        "platform-rg",
+                        "UnusedReservation",
+                        Decimal("0"),
+                        "1 Month",
+                        platform_tags,
+                    )
+                )
 
     return {"properties": {"columns": _COLUMNS, "rows": rows}}
 

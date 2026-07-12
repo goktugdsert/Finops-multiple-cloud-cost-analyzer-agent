@@ -150,6 +150,22 @@ SERVICES: list[ServiceSpec] = [
 
 _EC2 = "Amazon Elastic Compute Cloud - Compute"
 
+# A compute workload covered by a Savings Plan. Emitted as SavingsPlanCoveredUsage +
+# SavingsPlanRecurringFee lines so those (previously mapped-but-never-emitted) FOCUS charge
+# categories are actually exercised. Deterministic, no anomalies of its own.
+_SP_SPEC = ServiceSpec(
+    _EC2,
+    "Hrs",
+    Decimal("0.096"),
+    base_units=300,
+    growth_per_month=0.0,
+    weekend_factor=1.0,
+    noise=0.02,
+    team="platform",
+    environment="prod",
+    owner="alice",
+)
+
 # (day_index, service_key, multiplier) spikes injected into usage.
 DEFAULT_ANOMALIES: tuple[tuple[int, str, float], ...] = (
     (38, _EC2, 2.5),  # runaway autoscaling
@@ -164,6 +180,11 @@ class GeneratorConfig:
     tax_rate: float = 0.07
     monthly_credit: Decimal = Decimal("250.00")
     ec2_daily_ri_fee: Decimal = Decimal("18.00")
+    # Savings Plan: a covered EC2 workload discounted `sp_discount` off on-demand, paid via a
+    # flat daily recurring fee. Covered usage is billed $0 (its cost is the fee) and the fee
+    # amortizes back onto the usage — the accurate AWS SP shape.
+    savings_plan: bool = True
+    sp_discount: float = 0.27
     anomalies: tuple[tuple[int, str, float], ...] = field(default=DEFAULT_ANOMALIES)
 
 
@@ -172,15 +193,30 @@ def _money(value: Decimal) -> str:
 
 
 def _metrics(
-    unblended: Decimal, amortized: Decimal, usage: Decimal, unit: str, currency: str = "USD"
+    unblended: Decimal,
+    amortized: Decimal,
+    usage: Decimal,
+    unit: str,
+    currency: str = "USD",
+    *,
+    list_cost: Decimal | None = None,
+    blended: Decimal | None = None,
 ) -> dict[str, dict[str, str]]:
     # Net* equals gross here: credits/refunds are modeled as their own lines, exactly as
-    # Cost Explorer splits them out.
+    # Cost Explorer splits them out. ListCost is the on-demand (pre-discount) price; for
+    # on-demand lines it equals unblended, for commitment-covered lines it is higher.
+    # BlendedCost is AWS's consolidated-average measure — equal to unblended on-demand, but
+    # it differs for commitment-covered usage, which is exactly why we ingest it separately.
+    list_cost = unblended if list_cost is None else list_cost
+    blended = unblended if blended is None else blended
     return {
         "UnblendedCost": {"Amount": _money(unblended), "Unit": currency},
         "NetUnblendedCost": {"Amount": _money(unblended), "Unit": currency},
+        "BlendedCost": {"Amount": _money(blended), "Unit": currency},
+        "NetBlendedCost": {"Amount": _money(blended), "Unit": currency},
         "AmortizedCost": {"Amount": _money(amortized), "Unit": currency},
         "NetAmortizedCost": {"Amount": _money(amortized), "Unit": currency},
+        "ListCost": {"Amount": _money(list_cost), "Unit": currency},
         "UsageQuantity": {"Amount": _money(usage), "Unit": unit},
     }
 
@@ -218,6 +254,43 @@ def _daily_usage(spec: ServiceSpec, day_index: int, day: date, config: Generator
     return max(0.0, usage)
 
 
+def _savings_plan_groups(
+    day_index: int, day: date, config: GeneratorConfig
+) -> list[dict[str, Any]]:
+    """Emit the two line items an active Savings Plan produces on a given day.
+
+    - SavingsPlanCoveredUsage: usage the plan covers. Billed (unblended) is $0 because the
+      cost is paid via the recurring fee; ListCost shows the on-demand price it displaces,
+      and AmortizedCost carries the plan cost allocated to this usage.
+    - SavingsPlanRecurringFee: the flat committed charge (a Purchase); it is what's invoiced,
+      and it amortizes into the covered usage above so amortized totals stay consistent.
+    """
+    usage = Decimal(str(_daily_usage(_SP_SPEC, day_index, day, config)))
+    on_demand = _SP_SPEC.rate * usage  # what the same usage would cost on-demand (ListCost)
+    amortized = on_demand * Decimal(str(1 - config.sp_discount))  # SP cost for this usage
+    fee = amortized  # recurring fee equals the amortized covered cost (consistent totals)
+    return [
+        _group(
+            [_SP_SPEC.key, "SavingsPlanCoveredUsage"],
+            # Billed $0 (covered), list = on-demand, effective = amortized SP cost.
+            _metrics(
+                Decimal("0"),
+                amortized,
+                usage,
+                _SP_SPEC.unit,
+                list_cost=on_demand,
+                blended=amortized,
+            ),
+            tags=_SP_SPEC.tags(),
+        ),
+        _group(
+            [_SP_SPEC.key, "SavingsPlanRecurringFee"],
+            # The invoiced fee; amortized $0 here (its cost is amortized into the usage).
+            _metrics(fee, Decimal("0"), Decimal("0"), "N/A", list_cost=fee, blended=fee),
+        ),
+    ]
+
+
 def build_response(start: date, end: date, config: GeneratorConfig | None = None) -> dict[str, Any]:
     """Build a Cost Explorer GetCostAndUsage response for [start, end) (end exclusive)."""
     config = config or GeneratorConfig()
@@ -232,18 +305,27 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
             usage = Decimal(str(_daily_usage(spec, day_index, day, config)))
             unblended = spec.rate * usage
             amortized = unblended * Decimal(str(1 - spec.ri_savings))
+            # For RI-covered services the consolidated BlendedCost reflects the amortized
+            # (post-commitment) figure, so blended != unblended — captured via x_blended_cost.
+            blended = amortized if spec.ri_savings else unblended
             groups.append(
                 _group(
                     [spec.key, "Usage"],
-                    _metrics(unblended, amortized, usage, spec.unit),
+                    _metrics(unblended, amortized, usage, spec.unit, blended=blended),
                     tags=spec.tags(),
                 )
             )
             if spec.taxable:
                 taxable_unblended += unblended
 
+        if config.savings_plan:
+            groups.extend(_savings_plan_groups(day_index, day, config))
+
         if config.ec2_daily_ri_fee:
             fee = config.ec2_daily_ri_fee
+            # RIFee is a recurring Purchase; RI-covered EC2 usage above is billed on-demand
+            # while this fee amortizes the reservation. (Real per-line RI amortization comes
+            # from the Cost & Usage Report; validated exactly only against a real account.)
             groups.append(_group([_EC2, "RIFee"], _metrics(fee, fee, Decimal("0"), "N/A")))
 
         if config.tax_rate:

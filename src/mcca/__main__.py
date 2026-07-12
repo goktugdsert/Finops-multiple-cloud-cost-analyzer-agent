@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage
 from mcca.agent.graph import build_agent_graph
 from mcca.agent.model import build_model
 from mcca.config import get_settings
+from mcca.eval.faithfulness import check_messages, warning_line
 from mcca.logging import configure_logging
 from mcca.tracing import flush_tracing, tracing_config
 from mcca.warehouse.postgres import PostgresRepository
@@ -49,7 +50,13 @@ def main() -> None:
         )
         return
 
-    print(_render(result["messages"][-1].content))
+    messages = result["messages"]
+    print(_render(messages[-1].content))
+
+    # Runtime faithfulness guard: warn if the answer states a figure no tool produced.
+    untraceable = check_messages(messages)
+    if untraceable:
+        print("\n" + warning_line(untraceable))
 
 
 def _render(content: object) -> str:

@@ -27,6 +27,7 @@ _RESTATABLE_COLUMNS = (
     "consumed_quantity",
     "pricing_quantity",
     "is_estimated",
+    "x_blended_cost",
     "charge_class",
     "tags",
     "source_system",
@@ -71,14 +72,20 @@ class PostgresRepository(WarehouseRepository):
             deduped[row["line_key"]] = row
         batch = list(deduped.values())
 
-        stmt = pg_insert(focus_costs).values(batch)
-        set_ = {col: stmt.excluded[col] for col in _RESTATABLE_COLUMNS}
-        set_["ingested_at"] = func.now()  # record when the line was last restated
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[focus_costs.c.line_key], set_=set_
-        )
+        # An ON CONFLICT upsert inlines every row's values into one statement, so a large
+        # period would exceed Postgres's 65535 bind-parameter cap. Chunk to stay well under.
+        columns = len(batch[0])
+        chunk_size = max(1, 60000 // columns)
         with self._engine.begin() as conn:
-            conn.execute(stmt)
+            for start in range(0, len(batch), chunk_size):
+                chunk = batch[start : start + chunk_size]
+                stmt = pg_insert(focus_costs).values(chunk)
+                set_ = {col: stmt.excluded[col] for col in _RESTATABLE_COLUMNS}
+                set_["ingested_at"] = func.now()  # when the line was last restated
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[focus_costs.c.line_key], set_=set_
+                )
+                conn.execute(stmt)
         return len(records)
 
     def fetch_all(self) -> list[dict[str, Any]]:

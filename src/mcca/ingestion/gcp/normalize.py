@@ -42,10 +42,17 @@ def normalize_row(row: GcpCostRow, billing_account_id: str = "unknown") -> Focus
     billing_start, billing_end = _billing_period(charge_start)
 
     net = row.cost + row.credits_total
+    # A negative credit on a usage line is GCP's committed-use discount (its analogue of an
+    # RI/SP). Flag it so committed spend is identifiable cross-cloud; list_cost keeps the
+    # pre-credit gross so the discount (list - billed) is queryable.
+    has_cud = row.credits_total < 0
     return FocusRecord(
         billed_cost=net,
         effective_cost=net,
         list_cost=row.cost,  # gross list price before credits
+        commitment_discount_type="Committed Use Discount" if has_cud else None,
+        commitment_discount_category="Usage" if has_cud else None,
+        commitment_discount_status="Used" if has_cud else None,
         billing_currency=row.currency,
         billing_account_id=billing_account_id,
         sub_account_id=row.project_id,

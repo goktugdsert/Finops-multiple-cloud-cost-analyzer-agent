@@ -93,6 +93,11 @@ class FocusRecord(BaseModel):
     x_environment: str = Field(default=UNATTRIBUTED)
     x_owner: str = Field(default=UNATTRIBUTED)
 
+    # AWS BlendedCost, captured for visibility only (FOCUS has no blended measure). billed_cost
+    # is always unblended; this exists so blended-vs-unblended can be compared, never summed
+    # as the bill. None for Azure/GCP, which don't report a blended figure.
+    x_blended_cost: Decimal | None = None
+
     # --- Provenance ----------------------------------------------------------
     source_system: str | None = None
 

@@ -18,6 +18,7 @@ from pydantic import Field, create_model
 from mcca.analysis.drivers import explain_change
 from mcca.budgets.service import spend_vs_budget
 from mcca.detection.service import detect
+from mcca.forecasting.model import summarize_forecast
 from mcca.forecasting.service import forecast_daily_spend
 from mcca.queries.registry import (
     COST_METRICS,
@@ -85,10 +86,20 @@ def _make_tool(definition: QueryDefinition, repo: WarehouseRepository) -> BaseTo
 
 
 def _serialize_forecast(forecast: Any) -> dict[str, Any]:
+    # Deterministic narration guards so the model can't invert the weekly pattern, invent a
+    # holiday, or mislabel the interval — it reads direction/seasonality/interval from here.
+    narration = summarize_forecast(forecast)
     return {
         "model": forecast.model,
         "metric": forecast.metric,
         "interval": forecast.interval,
+        "interval_pct": narration.interval_pct,
+        "seasonality": narration.seasonality,
+        "summary": {
+            "weekday_mean": str(narration.weekday_mean),
+            "weekend_mean": str(narration.weekend_mean),
+            "higher": narration.higher,
+        },
         "horizon": forecast.horizon,
         "history_start": _json_safe(forecast.history_start),
         "history_end": _json_safe(forecast.history_end),
@@ -96,6 +107,8 @@ def _serialize_forecast(forecast: Any) -> dict[str, Any]:
         "points": [
             {
                 "date": p.date.isoformat(),
+                "weekday": p.date.strftime("%a"),
+                "is_weekend": p.date.weekday() >= 5,
                 "yhat": str(p.yhat),
                 "lower": str(p.lower),
                 "upper": str(p.upper),
@@ -135,7 +148,10 @@ def _make_forecast_tool(repo: WarehouseRepository) -> BaseTool:
         name="forecast_spend",
         description=(
             "Forecast future daily spend with an uncertainty (prediction) interval, using "
-            "historical daily spend over [start, end). Always returns lower/upper bounds."
+            "historical daily spend over [start, end). Returns lower/upper bounds, an "
+            "explicit `interval_pct`, a `seasonality` note (what the model does and does NOT "
+            "capture), and a `summary` giving weekday vs weekend mean spend and which is "
+            "`higher` — read direction and interval from these, do not infer them."
         ),
         args_schema=_forecast_args(),
     )

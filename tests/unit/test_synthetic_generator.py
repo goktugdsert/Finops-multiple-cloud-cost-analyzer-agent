@@ -92,6 +92,39 @@ def test_anomaly_multiplies_exactly() -> None:
     assert spiked / base == pytest.approx(2.5, abs=1e-6)
 
 
+def test_savings_plan_line_items_are_emitted() -> None:
+    resp = build_response(START, START.replace(day=2))
+    record_types = {g["Keys"][1] for g in resp["ResultsByTime"][0]["Groups"]}
+    # Both SP charge types the mapping expects are now actually produced.
+    assert "SavingsPlanCoveredUsage" in record_types
+    assert "SavingsPlanRecurringFee" in record_types
+
+
+def test_savings_plan_covered_usage_is_billed_zero_below_list() -> None:
+    day0 = build_response(START, START.replace(day=2))["ResultsByTime"][0]
+    covered = next(g for g in day0["Groups"] if g["Keys"][1] == "SavingsPlanCoveredUsage")
+    m = covered["Metrics"]
+    assert Decimal(m["UnblendedCost"]["Amount"]) == Decimal("0")  # covered -> $0 billed
+    assert Decimal(m["ListCost"]["Amount"]) > 0  # displaces a real on-demand cost
+    assert Decimal(m["AmortizedCost"]["Amount"]) > 0  # the SP cost lands in amortized
+
+
+def test_list_and_blended_metrics_present_on_usage() -> None:
+    day0 = build_response(START, START.replace(day=2))["ResultsByTime"][0]
+    ec2 = _usage_groups(day0)["Amazon Elastic Compute Cloud - Compute"]  # RI-covered
+    m = ec2["Metrics"]
+    assert "ListCost" in m and "BlendedCost" in m
+    # RI-covered: blended reflects the amortized figure, so it differs from unblended.
+    assert Decimal(m["BlendedCost"]["Amount"]) == Decimal(m["AmortizedCost"]["Amount"])
+    assert Decimal(m["BlendedCost"]["Amount"]) != Decimal(m["UnblendedCost"]["Amount"])
+
+
+def test_savings_plan_can_be_disabled() -> None:
+    resp = build_response(START, START.replace(day=2), GeneratorConfig(savings_plan=False))
+    record_types = {g["Keys"][1] for g in resp["ResultsByTime"][0]["Groups"]}
+    assert "SavingsPlanCoveredUsage" not in record_types
+
+
 def test_flows_through_normalizer_to_focus_records() -> None:
     resp = build_response(START, END)
     records = normalize_records(flatten_response([resp]))

@@ -1,60 +1,129 @@
-# mcca-agent — Multi-Cloud Cost Analyzer
+# Multi-Cloud Cost Analyzer (MCCA)
 
-A read-only, multi-cloud FinOps agent (LangChain / LangGraph) that normalizes cloud
-billing + usage into one **FOCUS-schema** warehouse, then measures, attributes,
-explains, and forecasts cloud spend. See [CLAUDE.md](CLAUDE.md) for full scope.
+[![CI](https://github.com/goktugdsert/Finops-multiple-cloud-cost-analyzer-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/goktugdsert/Finops-multiple-cloud-cost-analyzer-agent/actions/workflows/ci.yml)
 
-**Core principle (non-negotiable):** the LLM orchestrates and explains but never
-produces a cost figure. Every number comes from a deterministic tool (a validated query
-or a calculation). If a number can't be traced to a query, it isn't shown.
+A read-only, multi-cloud **FinOps agent** (LangChain / LangGraph) that normalizes AWS,
+Azure, and GCP billing into one **FOCUS-schema** warehouse, then measures, attributes,
+detects, explains, forecasts, and tracks cloud spend against budgets — routing findings to
+an owner with a recommended action. It **recommends only; it never touches infrastructure.**
 
-> Status: **Session 1 — scaffold only.** AWS is the first cloud. Ingestion, the query
-> layer, the agent graph, and forecasting are stubbed (`NotImplementedError`) so the
-> module boundaries are real. No Azure/GCP yet.
+> **Core principle (non-negotiable):** the LLM orchestrates and explains but **never
+> produces a cost figure of its own.** Every number comes from a deterministic tool — a
+> validated SQL query or a calculation. If a number can't be traced to a query, it isn't
+> shown. This is enforced *structurally* (see [Trust boundary](#trust-boundary)), not by a
+> prompt.
 
-## Architecture (one-way dependencies)
+## Status
+
+**v1 is feature-complete and validated on synthetic data.** All three clouds, the full
+FinOps loop, both pillars (unified visibility + predictive budgeting), a web chat UI, a
+static HTML report, evals, and Langfuse tracing. **153 tests pass** (+1 intentionally
+skipped live-credential check).
+
+**Honest scope:** there are no real cloud accounts — the agent runs on a deterministic
+**synthetic** dataset that emits each cloud's native billing shape. "Validated" means
+*provably correct against synthetic ground truth*, **not** reconciled to a real invoice.
+Three items remain open debts that require real billing data and are explicitly **not**
+done: real-console reconciliation, real-CUR confirmation of RI/SP/credit/blended handling,
+and the live least-privilege access-scoping check. See
+[CLAUDE.md → Open v1 debts](CLAUDE.md).
+
+## What it does — the FinOps loop
 
 ```
-ingestion/aws ──┐
-                ├──► warehouse (schema + repository interface)
-queries ────────┘            ▲
-   ▲                         │
-tools ───────────────────────┘   (tools run validated queries + calculations only)
+measure → attribute → detect → explain → forecast → track-vs-budget → route-to-owner
+```
+
+- **Measure** spend across AWS/Azure/GCP through a fixed set of validated queries.
+- **Attribute** it to team / service / environment / owner (untagged spend shows honestly
+  as `unattributed`).
+- **Detect** both spending spikes and steady structural waste.
+- **Explain** *why* spend changed (per-service driver decomposition).
+- **Forecast** future daily spend (SARIMAX, with an uncertainty band always shown).
+- **Track** month-to-date + forecast against a stored budget.
+- **Route** findings to an owner with a recommended action (recommend-only).
+
+## Trust boundary
+
+```
+ingestion/{aws,azure,gcp} ──┐
+                            ├──► warehouse (FOCUS schema, behind a repository interface)
+queries (fixed, validated) ─┘            ▲
+   ▲                                      │
+tools (run queries + calculations only) ──┘
    ▲
-agent (LangGraph)  ──► tools ONLY
+agent (LangGraph loop) ──► tools ONLY
 ```
 
-- **`warehouse/`** — the data-access layer behind a `WarehouseRepository` interface.
-  Postgres in v1 (`postgres.py`); swap to BigQuery/Snowflake later by adding a new
-  implementation — no change to `queries/`, `tools/`, or `agent/`.
-- **`agent/`** imports only `tools/`; never `boto3`, ingestion, or raw SQL. That import
-  boundary makes the core principle structural, not just a prompt rule.
+- The warehouse repository has **no string-SQL entry point** — only prepared, registered
+  statements run. The agent chooses a query *name* and parameters; it never writes SQL.
+- `agent/` and `tools/` import **no cloud SDK** (`boto3`/azure/google) — the reasoning
+  layer literally cannot reach a cloud API or mutate anything.
+- A **numeric-faithfulness** check re-derives every query answer independently and asserts
+  exact agreement, and a **prose-faithfulness** guard flags any dollar figure in an answer
+  that traces to no tool output. (`uv run mcca-eval-numeric`.)
 
 ## Prerequisites
-- [uv](https://docs.astral.sh/uv/) (manages Python + deps; installs a 3.11+ interpreter)
-- Docker (for local Postgres)
+
+- [uv](https://docs.astral.sh/uv/) — manages Python (3.11+) and dependencies
+- Docker — local Postgres warehouse
+- *(optional)* [Ollama](https://ollama.com/) for a free local LLM, or a Google/OpenAI/
+  Anthropic key — only needed to actually chat with the agent; **not** needed for setup,
+  seeding, the report, or the test suite
 
 ## Setup
+
 ```bash
-cp .env.example .env          # then edit; .env is gitignored, never commit it
-uv sync                        # create venv, install deps, write uv.lock
-docker compose up -d           # start local Postgres (pinned)
-uv run alembic upgrade head    # create the FOCUS schema
+cp .env.example .env            # then edit; .env is gitignored — never commit it
+uv sync                          # create venv, install deps
+docker compose up -d             # start local Postgres (pinned 16.4)
+uv run alembic upgrade head      # create the FOCUS schema
+uv run mcca-seed                 # load ~9 months of synthetic AWS+Azure+GCP data + a budget
 ```
 
-## Test
+`mcca-seed --cloud {aws,azure,gcp,all}` seeds a subset. Re-ingestion is idempotent
+(upsert on natural billing-line identity), so re-running never double-counts.
+
+## Running it
+
 ```bash
-uv run pytest                  # unit tests always run; integration needs Postgres up
-uv run pytest -m "not integration"   # unit only
-uv run ruff check .            # lint
-uv run ruff format .           # format
+uv run mcca-web            # interactive chat UI + report at http://127.0.0.1:8000
+uv run mcca "How much did we spend in total from 2026-01-01 to 2026-04-01?"
+uv run mcca-report        # generate a self-contained HTML cost report
+uv run mcca-eval          # agent eval: tool selection + prose numeric faithfulness (needs an LLM)
+uv run mcca-eval-numeric  # deterministic: every fixed query returns fixture-exact figures (no LLM)
 ```
 
-## AWS credentials (read-only, least-privilege)
-The agent is read-only. Provide a least-privilege billing role granting only Cost
-Explorer read, CUR read (+ S3 read of the CUR bucket), and CloudWatch read — no
-write/terminate anywhere. Supply via an AWS profile or env vars in `.env`
-(`MCCA_AWS_*`). Never hardcode or commit credentials. See `.env.example`.
+### Demo prompts
 
-## Layout
-See [CLAUDE.md](CLAUDE.md) → Conventions → Directory layout.
+- `What were the top 3 services by cost from 2026-01-01 to 2026-07-01?`
+- `Which cloud provider costs the most this year?`
+- `Are we on track against our budget for June 2026?`
+- `Why did spend change from May to June 2026?`
+- `Forecast our daily spend for the next 30 days.`
+- `What cost findings should we act on, and who owns them?`
+
+## LLM provider (config-driven, swappable)
+
+The agent's model is chosen by `MCCA_LLM_PROVIDER` ∈ `{ollama, google, openai, anthropic}`
+(and `MCCA_AGENT_MODEL`). The graph and tools are provider-agnostic — switching is two
+lines in `.env`. Free options: **ollama** (local, unlimited) or **google** (free tier).
+The LLM is a reasoning/orchestration engine only; it is never a source of figures.
+
+## Testing & CI
+
+```bash
+uv run pytest                        # full suite (integration self-skips if Postgres is down)
+uv run pytest -m "not integration"   # unit only (no DB needed)
+uv run ruff check . && uv run ruff format --check .
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, applies the full
+migration chain against a fresh Postgres, and runs the entire suite (unit + integration,
+via a scripted model — no cloud creds or LLM key) on every push and PR.
+
+## More
+
+- **Full scope, principles, as-built status, and open debts:** [CLAUDE.md](CLAUDE.md)
+- **Data model:** FOCUS (FinOps Open Cost & Usage Specification), Postgres in v1 behind a
+  `WarehouseRepository` interface so the store can be swapped without touching agent logic.

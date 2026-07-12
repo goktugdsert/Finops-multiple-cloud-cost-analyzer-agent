@@ -49,6 +49,24 @@ def test_has_purchase_line_and_untagged_waste() -> None:
     assert disks and disks[0][ci["team"]] == ""
 
 
+def test_emits_credit_and_adjustment_charge_types() -> None:
+    resp = build_azure_response(START, END)
+    charge_types = {r[_cols(resp).index("ChargeType")] for r in resp["properties"]["rows"]}
+    # Previously mapped-but-never-emitted Azure charge types are now produced.
+    assert "Refund" in charge_types
+    assert "UnusedReservation" in charge_types
+
+
+def test_refund_and_unused_reservation_normalize_correctly() -> None:
+    records = normalize_records(flatten_query_response(build_azure_response(START, END)))
+    credits = [r for r in records if r.charge_category == "Credit"]
+    adjustments = [r for r in records if r.charge_category == "Adjustment"]
+    assert credits and all(r.billed_cost < 0 for r in credits)  # refunds are negative
+    assert adjustments and any(
+        r.commitment_discount_type == "Reserved Instance" for r in adjustments
+    )
+
+
 def test_flows_through_normalizer() -> None:
     records = normalize_records(flatten_query_response(build_azure_response(START, END)))
     assert len(records) > 1000

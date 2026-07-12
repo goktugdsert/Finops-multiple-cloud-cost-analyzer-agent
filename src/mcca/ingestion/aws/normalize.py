@@ -7,11 +7,19 @@ are trusted (CLAUDE.md, "where quality lives").
 Cost-measure mapping (Cost Explorer metric -> FOCUS column):
     billed_cost     <- NetUnblendedCost   (invoiced amount, after credits/refunds)
     effective_cost  <- NetAmortizedCost   (amortized RIs/SPs, after credits/refunds)
-    list_cost       <- None               (needs CUR / pricing API; not asserted in v1)
-    contracted_cost <- None               (same)
+    list_cost       <- ListCost           (on-demand, pre-discount; CUR-grade — see below)
+    x_blended_cost  <- BlendedCost         (consolidated average; captured, never billed)
 Using the *Net* metrics means credits and refunds are already reflected in the headline
 figures; credit/refund line items themselves also appear as their own rows (RECORD_TYPE
-Credit/Refund) with negative amounts, which is how Cost Explorer models them.
+Credit/Refund) with negative amounts, which is how Cost Explorer models them. billed_cost is
+always UNBLENDED — blended is ingested only into x_blended_cost for comparison.
+
+Commitment discounts: the RECORD_TYPE drives both the charge category and the FOCUS
+commitment_discount_* columns (RIFee / SavingsPlanRecurringFee -> Spend; DiscountedUsage /
+SavingsPlanCoveredUsage -> Usage). PROVEN-AGAINST-FIXTURE here: the synthetic provider emits
+these line items and this mapping is unit-tested. STILL NEEDS REAL DATA: ListCost and true
+per-line RI/SP amortization come from the Cost & Usage Report, not the aggregated Cost
+Explorer API — the exact figures are confirmable only against a real account's CUR.
 
 Attribution: `attribution_from_tags` maps cost-allocation tags (team/service/environment/
 owner) onto the FOCUS x_* columns. Lines without a given tag keep the honest
@@ -34,6 +42,19 @@ from mcca.warehouse.models import FocusRecord
 # Cost Explorer metrics chosen as the FOCUS headline measures.
 BILLED_METRIC = "NetUnblendedCost"
 EFFECTIVE_METRIC = "NetAmortizedCost"
+
+# Commitment-discount metadata inferred from the AWS RECORD_TYPE. Populates the FOCUS
+# commitment_discount_* columns so RI/SP-covered lines are identifiable. Values: the FOCUS
+# CommitmentDiscountType and CommitmentDiscountCategory (Usage = a covered-usage line,
+# Spend = a commitment fee/purchase). Everything else leaves the columns NULL (on-demand).
+COMMITMENT_BY_RECORD_TYPE: dict[str, tuple[str, str]] = {
+    "RIFee": ("Reserved Instance", "Spend"),
+    "DiscountedUsage": ("Reserved Instance", "Usage"),
+    "SavingsPlanRecurringFee": ("Savings Plan", "Spend"),
+    "SavingsPlanUpfrontFee": ("Savings Plan", "Spend"),
+    "SavingsPlanCoveredUsage": ("Savings Plan", "Usage"),
+    "SavingsPlanNegation": ("Savings Plan", "Usage"),
+}
 
 
 # AWS RECORD_TYPE dimension -> FOCUS ChargeCategory
@@ -95,10 +116,17 @@ def normalize_row(row: RawCostRow, billing_account_id: str = "unknown") -> Focus
 
     record_type = row.groups.get("RECORD_TYPE")
     charge_category = RECORD_TYPE_TO_CHARGE_CATEGORY.get(record_type or "", "Usage")
+    commitment = COMMITMENT_BY_RECORD_TYPE.get(record_type or "")
+    commitment_type = commitment[0] if commitment else None
+    commitment_category = commitment[1] if commitment else None
 
     return FocusRecord(
         billed_cost=_amount(row.metrics, BILLED_METRIC),
         effective_cost=_amount(row.metrics, EFFECTIVE_METRIC),
+        # ListCost (on-demand, pre-discount) and BlendedCost come from CUR-grade data; when
+        # present they let us represent the full list -> billed -> effective discount stack.
+        list_cost=_optional_amount(row.metrics, "ListCost"),
+        x_blended_cost=_optional_amount(row.metrics, "BlendedCost"),
         billing_currency=_unit(row.metrics, BILLED_METRIC, "USD"),
         billing_account_id=billing_account_id,
         billing_period_start=billing_start,
@@ -107,6 +135,9 @@ def normalize_row(row: RawCostRow, billing_account_id: str = "unknown") -> Focus
         charge_period_end=charge_end,
         charge_category=charge_category,
         charge_description=record_type,
+        commitment_discount_type=commitment_type,
+        commitment_discount_category=commitment_category,
+        commitment_discount_status="Used" if commitment else None,
         provider_name="AWS",
         service_name=row.groups.get("SERVICE"),
         consumed_quantity=_optional_amount(row.metrics, "UsageQuantity"),

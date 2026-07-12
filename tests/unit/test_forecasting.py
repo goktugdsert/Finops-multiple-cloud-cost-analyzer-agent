@@ -9,8 +9,36 @@ from typing import Any
 
 import pytest
 
-from mcca.forecasting.model import forecast_series
+from mcca.forecasting.model import (
+    Forecast,
+    ForecastPoint,
+    forecast_series,
+    summarize_forecast,
+)
 from mcca.forecasting.service import forecast_daily_spend
+
+
+def _pt(d: date, yhat: float) -> ForecastPoint:
+    return ForecastPoint(
+        date=d, yhat=Decimal(str(yhat)), lower=Decimal("0"), upper=Decimal(str(yhat * 2))
+    )
+
+
+def _forecast(points: list, *, model: str = "SARIMAX(1,1,1)(1,1,1,7)", interval: float = 0.8):
+    return Forecast(
+        model=model,
+        metric="billed_cost",
+        interval=interval,
+        horizon=len(points),
+        history_start=None,
+        history_end=None,
+        history_points=100,
+        points=points,
+    )
+
+
+# 2026-01-05 is a Monday, so days 0-4 are Mon-Fri and days 5-6 are Sat-Sun.
+_WEEK = [date(2026, 1, 5) + timedelta(days=i) for i in range(7)]
 
 
 def _series(days: int, base: float = 100.0, slope: float = 1.0, weekly: float = 0.0) -> list:
@@ -66,6 +94,39 @@ class _FakeRepo:
     def create_schema(self) -> None: ...
     def insert_records(self, records: Any) -> int: ...
     def fetch_all(self) -> list[dict[str, Any]]: ...
+
+
+def test_summary_reads_weekday_high_direction_from_values() -> None:
+    # Weekdays high, weekend low — the real pattern the 9B model once inverted.
+    points = [_pt(d, 1000 if d.weekday() < 5 else 800) for d in _WEEK]
+    n = summarize_forecast(_forecast(points))
+    assert n.weekday_mean == Decimal("1000.00")
+    assert n.weekend_mean == Decimal("800.00")
+    assert n.higher == "weekdays"  # direction handed to the model as fact, not inference
+
+
+def test_summary_reads_weekend_high_direction() -> None:
+    points = [_pt(d, 500 if d.weekday() < 5 else 900) for d in _WEEK]
+    assert summarize_forecast(_forecast(points)).higher == "weekends"
+
+
+def test_summary_interval_pct_is_explicit() -> None:
+    points = [_pt(d, 100) for d in _WEEK]
+    assert summarize_forecast(_forecast(points, interval=0.8)).interval_pct == 80
+    assert summarize_forecast(_forecast(points, interval=0.9)).interval_pct == 90
+
+
+def test_sarimax_seasonality_note_forbids_holiday_stories() -> None:
+    n = summarize_forecast(_forecast([_pt(d, 100) for d in _WEEK]))
+    assert "weekly" in n.seasonality
+    assert "holiday" in n.seasonality.lower()  # explicitly warns against holiday narration
+
+
+def test_linear_model_declares_no_seasonality() -> None:
+    points = [_pt(d, 100) for d in _WEEK]
+    n = summarize_forecast(_forecast(points, model="linear-trend+residual-band"))
+    assert "linear trend only" in n.seasonality
+    assert "holiday" in n.seasonality.lower()
 
 
 def test_forecast_daily_spend_reads_history_via_query() -> None:

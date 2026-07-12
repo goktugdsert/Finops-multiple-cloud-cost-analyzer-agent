@@ -44,8 +44,10 @@ mcca-seed = "mcca.ingestion.synthetic.seed:main"
 mcca-report = "mcca.surface.report:main"
 # Serve the interactive web chat UI (report + ask-the-agent).
 mcca-web = "mcca.surface.web:main"
-# Run the curated agent eval set.
+# Run the curated agent eval set (tool selection + prose numeric faithfulness).
 mcca-eval = "mcca.eval.runner:main"
+# Deterministic numeric-faithfulness eval: every fixed query returns fixture-exact figures.
+mcca-eval-numeric = "mcca.eval.numeric:main"
 
 [dependency-groups]
 dev = [

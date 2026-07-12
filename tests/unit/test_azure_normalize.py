@@ -96,3 +96,41 @@ def test_untagged_row_is_unattributed(rows) -> None:
     disks = normalize_records(rows)[1]
     assert disks.x_team == UNATTRIBUTED
     assert disks.tags is None
+
+
+def _azure_row(charge_type: str, cost: float) -> object:
+    response = {
+        "properties": {
+            "columns": RESPONSE["properties"]["columns"],
+            "rows": [
+                [
+                    cost,
+                    cost,
+                    20260601,
+                    "Virtual Machines",
+                    "platform-rg",
+                    charge_type,
+                    "USD",
+                    0.0,
+                    "1 Month",
+                    "platform",
+                    "prod",
+                    "alice",
+                ]
+            ],
+        }
+    }
+    return flatten_query_response(response)[0]
+
+
+def test_refund_maps_to_credit_and_stays_negative() -> None:
+    rec = normalize_row(_azure_row("Refund", -120.0))
+    assert rec.charge_category == "Credit"
+    assert rec.billed_cost == Decimal("-120.0")
+
+
+def test_unused_reservation_maps_to_adjustment_with_commitment() -> None:
+    rec = normalize_row(_azure_row("UnusedReservation", 35.0))
+    assert rec.charge_category == "Adjustment"
+    assert rec.commitment_discount_type == "Reserved Instance"
+    assert rec.commitment_discount_status == "Unused"

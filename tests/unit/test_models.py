@@ -38,9 +38,7 @@ def test_natural_key_ignores_amount_changes(sample_record: FocusRecord) -> None:
     estimate = sample_record.model_copy(
         update={"billed_cost": Decimal("100"), "is_estimated": True}
     )
-    final = sample_record.model_copy(
-        update={"billed_cost": Decimal("150"), "is_estimated": False}
-    )
+    final = sample_record.model_copy(update={"billed_cost": Decimal("150"), "is_estimated": False})
     # Same billing line -> same key, so the final reconciles over (not adds to) the estimate.
     assert estimate.natural_key() == final.natural_key()
 

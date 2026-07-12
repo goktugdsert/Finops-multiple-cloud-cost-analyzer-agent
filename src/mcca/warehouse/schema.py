@@ -112,6 +112,10 @@ focus_costs = Table(
     Column("x_service", Text, nullable=False, server_default=UNATTRIBUTED),
     Column("x_environment", Text, nullable=False, server_default=UNATTRIBUTED),
     Column("x_owner", Text, nullable=False, server_default=UNATTRIBUTED),
+    # AWS BlendedCost captured as a FOCUS x_ extension (FOCUS has no blended measure).
+    # We ingest it so the blended-vs-unblended distinction is visible, but billed_cost is
+    # always the *unblended* invoiced amount — never blended. Nullable: only AWS reports it.
+    Column("x_blended_cost", Numeric(20, 10), nullable=True),
     # --- Provenance ----------------------------------------------------------
     Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("source_system", Text, nullable=True),  # e.g. aws.cost_explorer

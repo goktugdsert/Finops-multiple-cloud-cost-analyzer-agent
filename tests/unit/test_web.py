@@ -70,3 +70,50 @@ def test_ask_runs_agent_and_returns_answer() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "total_spend" in body["answer"]
+
+
+def _scripted(final_text: str) -> BaseChatModel:
+    """A model that calls total_spend once, then answers with `final_text`."""
+
+    class _M(BaseChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "scripted"
+
+        def bind_tools(self, tools: Any, **kwargs: Any) -> BaseChatModel:
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+            if any(isinstance(m, ToolMessage) for m in messages):
+                msg = AIMessage(content=final_text)
+            else:
+                msg = AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "total_spend",
+                            "args": {"start": "2026-01-01", "end": "2026-04-01"},
+                            "id": "c1",
+                        }
+                    ],
+                )
+            return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    return _M()
+
+
+def test_ask_flags_untraceable_figure_at_runtime() -> None:
+    # The tool returns 123.45; the model fabricates $999,999.00 -> guard must warn.
+    app = create_app(repo=FakeRepo(), model=_scripted("Our total was $999,999.00."))
+    body = TestClient(app).post("/ask", json={"question": "total?"}).json()
+    assert "warning" in body
+    assert "999999.00" in body["warning"]
+    assert "faithfulness warning" in body["answer"]  # surfaced to the user, not just logged
+
+
+def test_ask_no_warning_when_every_figure_is_tool_sourced() -> None:
+    # 123.45 IS the tool's billed_cost -> traceable -> no warning.
+    app = create_app(repo=FakeRepo(), model=_scripted("Billed spend was $123.45."))
+    body = TestClient(app).post("/ask", json={"question": "total?"}).json()
+    assert "warning" not in body
+    assert "123.45" in body["answer"]

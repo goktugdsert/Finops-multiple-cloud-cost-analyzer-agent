@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint · migrate · test
+    runs-on: ubuntu-latest
+
+    # A real Postgres so the integration tests actually run (they self-skip only when the
+    # DB is unreachable). Matches docker-compose.yml (postgres:16.4, mcca/mcca/mcca).
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          POSTGRES_USER: mcca
+          POSTGRES_PASSWORD: mcca
+          POSTGRES_DB: mcca
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mcca -d mcca"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Point the app/tests at the service container. No .env is present in CI, so this is
+      # the only source of the warehouse URL. No cloud creds and no LLM key are needed —
+      # the integration tests drive the real graph with a scripted (fake) model.
+      MCCA_DATABASE_URL: postgresql+psycopg://mcca:mcca@localhost:5432/mcca
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (+ Python)
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync dependencies (locked)
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Apply migrations (validates the full 0001→0004 chain on a fresh DB)
+        run: uv run alembic upgrade head
+
+      - name: Run tests (unit + integration)
+        run: uv run pytest

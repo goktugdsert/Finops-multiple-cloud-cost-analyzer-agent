@@ -69,6 +69,28 @@ def test_forecast_tool_returns_bounded_points() -> None:
         assert float(p["lower"]) <= float(p["yhat"]) <= float(p["upper"])
 
 
+def test_forecast_tool_includes_narration_guards() -> None:
+    from datetime import date, timedelta
+
+    rows = [
+        {"day": date(2026, 1, 1) + timedelta(days=i), "amount": Decimal(str(100 + i))}
+        for i in range(40)
+    ]
+    tool = _tool(get_cost_tools(FakeRepo(rows)), "forecast_spend")
+    out = tool.invoke({"start": "2026-01-01", "end": "2026-02-10", "horizon": 14})
+
+    # Explicit interval + seasonality caveat so the model can't mislabel or invent a holiday.
+    assert out["interval_pct"] == 80
+    assert "holiday" in out["seasonality"].lower()
+    # Weekday/weekend direction is handed over as data, not left to inference.
+    assert set(out["summary"]) == {"weekday_mean", "weekend_mean", "higher"}
+    assert out["summary"]["higher"] in {"weekdays", "weekends", "about the same"}
+    # Every point is labeled with its weekday so the pattern can't be reversed.
+    for p in out["points"]:
+        assert p["weekday"] in {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+        assert isinstance(p["is_weekend"], bool)
+
+
 def test_tool_returns_json_safe_result_with_provenance() -> None:
     repo = FakeRepo([{"billed_cost": Decimal("123.45"), "effective_cost": Decimal("100.00")}])
     tool = _tool(get_cost_tools(repo), "total_spend")

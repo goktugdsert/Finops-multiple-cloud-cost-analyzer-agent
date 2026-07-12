@@ -53,9 +53,9 @@ def _row_count(repo: PostgresRepository) -> int:
 
 
 def _total(repo: PostgresRepository) -> Decimal:
-    return Decimal(str(run_query(repo, "total_spend", {"start": START, "end": END}).rows[0][
-        "billed_cost"
-    ]))
+    return Decimal(
+        str(run_query(repo, "total_spend", {"start": START, "end": END}).rows[0]["billed_cost"])
+    )
 
 
 def test_reingesting_same_period_does_not_drift(repo: PostgresRepository) -> None:
