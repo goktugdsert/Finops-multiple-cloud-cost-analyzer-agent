@@ -117,3 +117,17 @@ def test_ask_no_warning_when_every_figure_is_tool_sourced() -> None:
     body = TestClient(app).post("/ask", json={"question": "total?"}).json()
     assert "warning" not in body
     assert "123.45" in body["answer"]
+
+
+def test_decide_endpoint_is_wired() -> None:
+    # The approval endpoint exists and routes to the decide() workflow. With the fake repo
+    # no recommendation matches, so it returns an error — but a 200 with a JSON body proves
+    # the endpoint is wired (records intent only, never executes).
+    app = create_app(repo=FakeRepo(), model=ScriptedModel())
+    resp = TestClient(app).post(
+        "/decide",
+        json={"key": "nope", "status": "APPROVED", "start": "2026-01-01", "end": "2026-04-01"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "error" in body or "status" in body

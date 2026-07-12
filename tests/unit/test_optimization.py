@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from mcca.optimization.model import (
@@ -10,6 +11,8 @@ from mcca.optimization.model import (
     merge_decisions,
     recommendation_key,
 )
+
+_TODAY = date(2026, 6, 15)
 
 
 def _rec(key: str, status: str = PROPOSED) -> Recommendation:
@@ -44,9 +47,29 @@ def test_merge_defaults_to_proposed_when_no_decision() -> None:
 def test_merge_applies_persisted_decision() -> None:
     recs = [_rec("k1"), _rec("k2")]
     decisions = {"k1": {"status": "APPROVED", "decided_by": "alice", "note": "ok"}}
-    merged, counts = merge_decisions(recs, decisions)
+    merged, counts = merge_decisions(recs, decisions, today=_TODAY)
     by_key = {m.key: m for m in merged}
     assert by_key["k1"].status == "APPROVED"
     assert by_key["k1"].decided_by == "alice"
     assert by_key["k2"].status == PROPOSED
     assert counts == {"APPROVED": 1, PROPOSED: 1}
+
+
+def test_active_snooze_hides_the_recommendation() -> None:
+    decisions = {"k1": {"status": "SNOOZED", "snooze_until": date(2026, 6, 20)}}  # future
+    merged, counts = merge_decisions([_rec("k1")], decisions, today=_TODAY)
+    assert merged[0].status == "SNOOZED"
+    assert counts == {"SNOOZED": 1}
+
+
+def test_expired_snooze_re_surfaces_as_proposed() -> None:
+    decisions = {"k1": {"status": "SNOOZED", "snooze_until": date(2026, 6, 10)}}  # past
+    merged, counts = merge_decisions([_rec("k1")], decisions, today=_TODAY)
+    assert merged[0].status == PROPOSED  # snooze expired -> back in the queue
+    assert counts == {PROPOSED: 1}
+
+
+def test_snooze_without_until_stays_snoozed() -> None:
+    decisions = {"k1": {"status": "SNOOZED", "snooze_until": None}}
+    merged, _ = merge_decisions([_rec("k1")], decisions, today=_TODAY)
+    assert merged[0].status == "SNOOZED"

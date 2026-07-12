@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
@@ -24,6 +24,15 @@ from mcca.tools.cost_tools import catalog_hint, get_cost_tools
 
 if TYPE_CHECKING:
     from mcca.warehouse.repository import WarehouseRepository
+
+
+def _text(content: Any) -> str:
+    """Flatten a message's content (str or list-of-parts) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content)
 
 
 def build_agent_graph(
@@ -41,7 +50,15 @@ def build_agent_graph(
         messages = list(state["messages"])
         if not messages or getattr(messages[0], "type", None) != "system":
             messages = [SystemMessage(content=prompt), *messages]
-        return {"messages": [model_with_tools.invoke(messages)]}
+        response = model_with_tools.invoke(messages)
+        # One-shot retry for the occasional empty final answer (tool ran, no narration):
+        # if the model ends with neither a tool call nor any text, nudge it once.
+        if not getattr(response, "tool_calls", None) and not _text(response.content).strip():
+            nudge = HumanMessage(
+                content="Summarize the answer for the user based on the tool results above."
+            )
+            response = model_with_tools.invoke([*messages, nudge])
+        return {"messages": [response]}
 
     builder = StateGraph(AgentState)
     builder.add_node("model", call_model)

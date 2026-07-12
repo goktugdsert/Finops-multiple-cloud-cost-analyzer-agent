@@ -9,7 +9,7 @@ Requires `docker compose up -d`; skips if Postgres is unreachable.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -74,6 +74,20 @@ def test_decision_is_idempotent_update_not_duplicate(repo: PostgresRepository) -
     by_key = {r.key: r for r in after.recommendations}
     assert by_key[target.key].status == "DISMISSED"
     assert after.counts.get("APPROVED", 0) == 0  # not two rows; the decision was updated
+
+
+def test_snooze_expiry_round_trip(repo: PostgresRepository) -> None:
+    target = review_recommendations(repo, START, END).recommendations[0]
+
+    # Snooze until yesterday -> already expired -> re-surfaces as PROPOSED.
+    decide(repo, START, END, target.key, "SNOOZED", snooze_until=date.today() - timedelta(days=1))
+    reopened = {r.key: r for r in review_recommendations(repo, START, END).recommendations}
+    assert reopened[target.key].status == "PROPOSED"
+
+    # Snooze until tomorrow -> still active -> hidden as SNOOZED.
+    decide(repo, START, END, target.key, "SNOOZED", snooze_until=date.today() + timedelta(days=1))
+    active = {r.key: r for r in review_recommendations(repo, START, END).recommendations}
+    assert active[target.key].status == "SNOOZED"
 
 
 def test_invalid_and_unknown_decisions_rejected(repo: PostgresRepository) -> None:

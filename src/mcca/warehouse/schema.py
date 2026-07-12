@@ -21,6 +21,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     DateTime,
     Index,
     MetaData,
@@ -142,6 +143,24 @@ budgets = Table(
     UniqueConstraint("scope_type", "scope_value", name="uq_budget_scope"),
 )
 
+# Governance policies (v2), stored so an org configures its own rules instead of relying on
+# the code defaults. Each row is a declarative policy: a kind + JSON params + severity. The
+# engine loads enabled policies from here (seeded with sensible defaults; edit to customize).
+policies = Table(
+    "policies",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("policy_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),  # untagged_limit | team_cap | denied_service
+    Column("params", JSONB, nullable=False),
+    Column("severity", Text, nullable=False, server_default="MEDIUM"),
+    Column("description", Text, nullable=True),
+    Column("enabled", Boolean, nullable=False, server_default=text("true")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("policy_id", name="uq_policies_policy_id"),
+)
+
+
 # Human decisions on recommendations (the approval workflow). Recommendations themselves are
 # always recomputed live/grounded from routing + governance; only the DECISION is persisted
 # here, keyed on the recommendation's stable identity. A decision records intent only — it is
@@ -160,6 +179,9 @@ recommendation_decisions = Table(
     Column("action", Text, nullable=True),
     Column("decided_by", Text, nullable=True),
     Column("note", Text, nullable=True),
+    # For SNOOZED decisions: the date the snooze expires. Past that date the recommendation
+    # re-surfaces as PROPOSED, so a snooze is a temporary defer, not a silent dismiss.
+    Column("snooze_until", Date, nullable=True),
     Column("decided_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("rec_key", name="uq_recommendation_decisions_key"),
 )

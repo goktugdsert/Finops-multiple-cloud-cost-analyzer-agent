@@ -126,6 +126,13 @@ class AskRequest(BaseModel):
     question: str
 
 
+class DecideRequest(BaseModel):
+    key: str
+    status: str  # APPROVED | DISMISSED | SNOOZED
+    start: str
+    end: str
+
+
 def _message_text(content: Any) -> str:
     """Flatten a chat message's content (str or list-of-parts) to plain text."""
     if isinstance(content, str):
@@ -180,6 +187,26 @@ def create_app(repo: Any | None = None, model: Any | None = None, months: int = 
             return {"answer": answer}
         except Exception as exc:  # noqa: BLE001 - relay the error to the UI
             flush_tracing(settings)
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    @app.post("/decide")
+    def decide_recommendation(body: DecideRequest) -> dict[str, str]:
+        # Record a human decision on a recommendation. Intent only — nothing is executed.
+        from datetime import date
+
+        from mcca.optimization.service import decide
+
+        try:
+            rec = decide(
+                repo,
+                date.fromisoformat(body.start),
+                date.fromisoformat(body.end),
+                body.key,
+                body.status,
+                decided_by="web",
+            )
+            return {"key": rec.key, "status": rec.status}
+        except Exception as exc:  # noqa: BLE001 - relay the error to the UI
             return {"error": f"{type(exc).__name__}: {exc}"}
 
     return app

@@ -20,6 +20,7 @@ from mcca.detection.service import detect
 from mcca.forecasting.service import forecast_daily_spend
 from mcca.governance.service import evaluate_policies
 from mcca.logging import configure_logging
+from mcca.optimization.service import review_recommendations
 from mcca.queries.registry import run_query
 from mcca.routing.router import route
 from mcca.warehouse.postgres import PostgresRepository
@@ -56,6 +57,7 @@ def build_report_data(
     )
     routing = route(repo, start, end, budget_month=end)
     policy_violations = evaluate_policies(repo, start, end)
+    review = review_recommendations(repo, start, end)
     providers = run_query(repo, "spend_by_provider", window).rows
     # Recent daily history (tail of the window) so the forecast chart is a continuous
     # daily curve, not just an aggregate — grounded in the daily_spend query.
@@ -149,6 +151,16 @@ def build_report_data(
         "policy": [
             {"severity": v.severity, "summary": v.summary, "recommendation": v.recommendation}
             for v in policy_violations
+        ],
+        "recommendations": [
+            {
+                "key": r.key,
+                "severity": r.severity,
+                "summary": r.summary,
+                "action": r.action,
+                "status": r.status,
+            }
+            for r in review.recommendations
         ],
     }
 
@@ -475,6 +487,37 @@ overflow:hidden;margin:6px 0 4px}
 .mini .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;
 letter-spacing:.04em;font-weight:600}
 .mini .v{font-size:16px;font-weight:640;margin-top:3px;font-variant-numeric:tabular-nums}
+.rec-status{font-size:11px;color:var(--ink2);font-weight:600}
+.rec-actions{white-space:nowrap}
+.rec-btn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;border:1px solid var(--border);
+background:var(--plane);color:var(--ink);cursor:pointer;margin-left:6px}
+.rec-btn.ok:hover{border-color:var(--good);color:var(--good)}
+.rec-btn.no:hover{border-color:var(--crit);color:var(--crit)}
+.rec-btn:disabled{opacity:.5;cursor:default}
+"""
+
+
+# Approve/dismiss buttons POST to /decide (served by mcca-web). Inert in a static file.
+_RECS_JS = """
+<script>
+(function(){
+  var panel=document.getElementById('recs'); if(!panel) return;
+  var start=panel.dataset.start, end=panel.dataset.end;
+  panel.addEventListener('click', async function(e){
+    var btn=e.target.closest('.rec-btn'); if(!btn) return;
+    var row=btn.closest('tr'), cell=row.querySelector('.rec-status');
+    btn.disabled=true;
+    try{
+      var r=await fetch('/decide',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({key:row.dataset.key,status:btn.dataset.status,start:start,end:end})});
+      var j=await r.json();
+      if(j.status){ cell.textContent=j.status; row.style.opacity=.55; }
+      else { cell.textContent='(error)'; }
+    }catch(err){ cell.textContent='(offline)'; }
+    btn.disabled=false;
+  });
+})();
+</script>
 """
 
 
@@ -598,6 +641,39 @@ def render_html(data: dict[str, Any]) -> str:
     else:
         findings_panel = ""
 
+    recs = data.get("recommendations", [])
+    if recs:
+        sev_color = {"HIGH": "var(--crit)", "MEDIUM": "var(--serious)", "LOW": "var(--good)"}
+        status_counts: dict[str, int] = {}
+        for r in recs:
+            status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
+        counts_str = " · ".join(f"{k}:{v}" for k, v in sorted(status_counts.items()))
+        rec_rows = "".join(
+            f'<tr data-key="{escape(r["key"])}">'
+            f'<td><span class="badge"><span class="dot" '
+            f'style="background:{sev_color.get(r["severity"], "var(--good)")}"></span>'
+            f'{escape(r["severity"])}</span></td>'
+            f"<td>{escape(r['summary'])}<div class='foot' style='margin:3px 0 0'>&rarr; "
+            f"{escape(r['action'])}</div></td>"
+            f'<td class="rec-status">{escape(r["status"])}</td>'
+            f'<td class="rec-actions"><button class="rec-btn ok" data-status="APPROVED">'
+            f'Approve</button><button class="rec-btn no" data-status="DISMISSED">Dismiss</button>'
+            "</td></tr>"
+            for r in recs
+        )
+        rec_panel = (
+            f'<div class="card" id="recs" data-start="{escape(data["start"])}" '
+            f'data-end="{escape(data["end"])}"><div class="card-h">'
+            f"<h2>Recommendations &amp; approvals ({len(recs)})</h2>"
+            f'<span class="tag">{escape(counts_str)}</span></div>'
+            "<table><thead><tr><th>Severity</th><th>Recommendation</th><th>Status</th>"
+            f"<th>Decision</th></tr></thead><tbody>{rec_rows}</tbody></table>"
+            "<div class='foot'>A decision records intent only — nothing is executed. "
+            "(Buttons work when served by <code>mcca-web</code>.)</div></div>" + _RECS_JS
+        )
+    else:
+        rec_panel = ""
+
     policy = data.get("policy", [])
     if policy:
         sev_color = {"HIGH": "var(--crit)", "MEDIUM": "var(--serious)", "LOW": "var(--good)"}
@@ -699,6 +775,7 @@ def render_html(data: dict[str, Any]) -> str:
         f"{grid2}"
         "<div class='card'><div class='card-h'><h2>Top services by usage cost</h2></div>"
         f"{_mag_bars(services)}</div>"
+        f"{rec_panel}"
         f"{findings_panel}"
         f"{policy_panel}"
         f"{drivers_panel}"

@@ -17,6 +17,7 @@ from sqlalchemy import delete, func, select
 
 from mcca.budgets.store import upsert_budget
 from mcca.config import get_settings
+from mcca.governance.store import seed_default_policies
 from mcca.ingestion.aws.loader import ingest_cost_and_usage
 from mcca.ingestion.azure.loader import ingest_cost_management
 from mcca.ingestion.gcp.loader import ingest_billing_export
@@ -124,6 +125,7 @@ def main() -> None:
         written += n
         print(f"Seeded {n} GCP rows.")
     upsert_budget(repo, Decimal(str(args.budget)))
+    seed_default_policies(repo)  # populate the governance policy table with sensible defaults
 
     with repo.engine.connect() as conn:
         total_billed = conn.execute(select(func.sum(focus_costs.c.billed_cost))).scalar_one()

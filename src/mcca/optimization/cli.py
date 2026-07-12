@@ -12,7 +12,7 @@ read these statuses but cannot set them; only this human-run CLI records decisio
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 
 from mcca.config import get_settings
 from mcca.logging import configure_logging
@@ -56,6 +56,9 @@ def main() -> None:
         p.add_argument("key", help="Recommendation key (or a unique prefix).")
         p.add_argument("--by", default=None, help="Who made the decision.")
         p.add_argument("--note", default=None, help="Optional note.")
+        if name == "snooze":
+            p.add_argument("--until", default=None, help="Snooze until YYYY-MM-DD (re-surfaces after).")
+            p.add_argument("--days", type=int, default=None, help="Snooze for N days from today.")
     args = parser.parse_args()
 
     configure_logging()
@@ -64,6 +67,12 @@ def main() -> None:
     start, end = _window(args.months)
 
     if args.command in _STATUS:
+        snooze_until = None
+        if args.command == "snooze":
+            if getattr(args, "until", None):
+                snooze_until = date.fromisoformat(args.until)
+            elif getattr(args, "days", None):
+                snooze_until = date.today() + timedelta(days=args.days)
         rec = decide(
             repo,
             start,
@@ -72,8 +81,10 @@ def main() -> None:
             _STATUS[args.command],
             decided_by=args.by,
             note=args.note,
+            snooze_until=snooze_until,
         )
-        print(f"Recorded {rec.status} for {rec.key}: {rec.summary}")
+        suffix = f" (until {snooze_until})" if snooze_until else ""
+        print(f"Recorded {rec.status} for {rec.key}{suffix}: {rec.summary}")
         print("(Intent recorded only — nothing was executed.)")
     else:
         _print_list(repo, start, end)

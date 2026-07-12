@@ -14,6 +14,8 @@ from mcca.optimization.model import DECISION_STATUSES, Recommendation
 from mcca.warehouse.schema import recommendation_decisions
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from mcca.warehouse.repository import WarehouseRepository
 
 
@@ -32,6 +34,7 @@ def record_decision(
     *,
     decided_by: str | None = None,
     note: str | None = None,
+    snooze_until: date | None = None,
     snapshot: Recommendation | None = None,
 ) -> None:
     """Upsert a human's decision on a recommendation. Records intent only — no action taken."""
@@ -42,6 +45,7 @@ def record_decision(
         "status": status,
         "decided_by": decided_by,
         "note": note,
+        "snooze_until": snooze_until,
         "decided_at": func.now(),
     }
     if snapshot is not None:

@@ -108,3 +108,23 @@ def test_render_handles_empty_months() -> None:
     data = {**_DATA, "months": []}
     html = render_html(data)
     assert "<!doctype html>" in html  # does not crash on no history
+
+
+def test_recommendations_panel_renders_with_approval_buttons() -> None:
+    data = {
+        **_DATA,
+        "recommendations": [
+            {
+                "key": "abc123",
+                "severity": "HIGH",
+                "summary": "EC2 spiked 4x on 2026-01-04.",
+                "action": "Investigate the spike.",
+                "status": "PROPOSED",
+            }
+        ],
+    }
+    html = render_html(data)
+    assert "Recommendations &amp; approvals (1)" in html
+    assert 'data-key="abc123"' in html
+    assert 'data-status="APPROVED"' in html and 'data-status="DISMISSED"' in html
+    assert "/decide" in html  # the buttons POST here (served by mcca-web)

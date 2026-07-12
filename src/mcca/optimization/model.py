@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import Decimal
 
 # The default state of a live recommendation with no decision yet, plus the states a human
@@ -32,6 +33,7 @@ class Recommendation:
     status: str = PROPOSED
     decided_by: str | None = None
     note: str | None = None
+    snooze_until: date | None = None
 
 
 def recommendation_key(source: str, kind: str, scope: str, summary: str) -> str:
@@ -45,22 +47,34 @@ def recommendation_key(source: str, kind: str, scope: str, summary: str) -> str:
 
 
 def merge_decisions(
-    recommendations: list[Recommendation], decisions: dict[str, dict]
+    recommendations: list[Recommendation],
+    decisions: dict[str, dict],
+    today: date | None = None,
 ) -> tuple[list[Recommendation], dict[str, int]]:
-    """Attach each recommendation's persisted decision (default PROPOSED) and count statuses."""
+    """Attach each recommendation's persisted decision (default PROPOSED) and count statuses.
+
+    A SNOOZED decision whose `snooze_until` date has passed reverts to PROPOSED, so the
+    recommendation re-surfaces instead of staying hidden forever.
+    """
+    today = today or date.today()
     merged: list[Recommendation] = []
     for rec in recommendations:
         decision = decisions.get(rec.key)
         if decision is None:
             merged.append(rec)
-        else:
-            merged.append(
-                replace(
-                    rec,
-                    status=decision["status"],
-                    decided_by=decision.get("decided_by"),
-                    note=decision.get("note"),
-                )
+            continue
+        status = decision["status"]
+        snooze_until = decision.get("snooze_until")
+        if status == "SNOOZED" and snooze_until is not None and snooze_until < today:
+            status = PROPOSED  # snooze expired -> back in the queue
+        merged.append(
+            replace(
+                rec,
+                status=status,
+                decided_by=decision.get("decided_by"),
+                note=decision.get("note"),
+                snooze_until=snooze_until,
             )
+        )
     counts = dict(Counter(m.status for m in merged))
     return merged, counts

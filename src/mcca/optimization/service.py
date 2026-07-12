@@ -96,6 +96,7 @@ def decide(
     *,
     decided_by: str | None = None,
     note: str | None = None,
+    snooze_until: date | None = None,
     budget_month: date | None = None,
 ) -> Recommendation:
     """Record a human decision on a recommendation (matched by key or unique prefix).
@@ -112,7 +113,10 @@ def decide(
             f"Key {rec_key!r} is ambiguous ({len(matches)} matches); use a longer key."
         )
     rec = matches[0]
-    record_decision(repo, rec.key, status, decided_by=decided_by, note=note, snapshot=rec)
+    record_decision(
+        repo, rec.key, status,
+        decided_by=decided_by, note=note, snooze_until=snooze_until, snapshot=rec,
+    )
     from dataclasses import replace
 
-    return replace(rec, status=status, decided_by=decided_by, note=note)
+    return replace(rec, status=status, decided_by=decided_by, note=note, snooze_until=snooze_until)

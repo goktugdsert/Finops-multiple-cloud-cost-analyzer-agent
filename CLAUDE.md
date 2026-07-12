@@ -173,16 +173,16 @@ src/mcca/
   budgets/      model.py store.py service.py
   analysis/     drivers.py                          # explain-why (cost drivers)
   allocation/   policy.py service.py                # v2: shared-cost allocation onto teams
-  governance/   policy.py service.py                # v2: policy engine (recommend-only)
+  governance/   policy.py store.py service.py       # v2: policy engine (configurable, recommend-only)
   optimization/ model.py store.py service.py cli.py # v2: recommendation approval workflow
   knowledge/    corpus.py retriever.py service.py   # v2: RAG (qualitative only, no numbers)
   routing/      router.py                           # findings -> owner + recommendation
   surface/      report.py(HTML) web.py(FastAPI chat)
   eval/         dataset.py runner.py(tool-selection + faithfulness) numeric.py faithfulness.py
 migrations/  0001_focus_schema 0002_budgets 0003_line_reconciliation 0004_blended_cost
-             0005_recommendation_decisions
-             # 0003/0004 idempotent, 0002/0005 use checkfirst (0001 create_all builds current
-             # schema on fresh DBs)
+             0005_recommendation_decisions 0006_snooze_until 0007_policies
+             # 0003/0004/0006 idempotent, 0002/0005/0007 use checkfirst (0001 create_all
+             # builds the current schema on fresh DBs)
 ```
 
 ## Registered queries (queries/registry.py)
@@ -232,6 +232,12 @@ only the human `mcca-review` CLI records decisions); `search_knowledge` is QUALI
   — never a source of a cost figure**: a unit test asserts the corpus contains no dollar amounts,
   so RAG structurally cannot supply a number. Open NL→SQL is deliberately NOT built — the fixed
   query registry IS the semantic layer for numbers. Proven: `tests/unit/test_knowledge.py`.
+- ✅ **v2 polish** — (a) governance policies are now **configurable/persisted** (`policies`
+  table + `governance/store.py`, seeded by `mcca-seed`; `check_policies` reads the stored set);
+  (b) **snooze has an expiry** (`snooze_until`; expired snoozes re-surface as PROPOSED); (c)
+  **web approval buttons** — a "Recommendations & approvals" dashboard panel + `POST /decide`
+  endpoint (records intent only); (d) **empty-answer retry** in the graph. Proven:
+  `test_graph.py`, snooze/policy integration tests, `test_report.py`/`test_web.py`.
 - **v2 roadmap complete.** Remaining out-of-scope by principle: optimization auto-actioning
   (permanent — read-only), and open-ended text-to-SQL (numbers stay behind the fixed queries).
 
@@ -290,11 +296,10 @@ query/tool. Prior local-9B mis-narration issues are now mostly addressed:
   explicitly.
 - **Fabricated dollar figures in prose — GUARDED at runtime.** The faithfulness guard flags
   any answer figure not traceable to a tool (web + CLI).
-- **Empty final answer (tool ran, no narration) — STILL OPEN.** Occasional; a retry fixes it.
-  Could add a one-shot retry when the final message is empty. Drops sharply with a stronger
-  model.
-- **`contracted_cost` still always NULL.** `list_cost` (pre-discount) is now populated, but
-  the negotiated-rate tier is not modeled — the one FOCUS cost measure left unpopulated.
+- **Empty final answer (tool ran, no narration) — FIXED.** `agent/graph.py` retries the
+  model once with a nudge when it ends with neither a tool call nor any text.
+- **`contracted_cost` — POPULATED.** The negotiated tier is modeled (AWS fully; Azure/GCP use
+  documented defaults). The FOCUS list→contracted→billed→effective stack is now complete.
 
 ## Open v1 debts (require real data) — NOT done, do not mark done
 These are unverifiable by construction until a real billing account exists. They are
