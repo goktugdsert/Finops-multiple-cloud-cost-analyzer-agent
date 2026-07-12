@@ -34,48 +34,64 @@ from mcca.warehouse.postgres import PostgresRepository
 logger = logging.getLogger(__name__)
 
 _CHAT_HTML = """
-<div class='panel'>
-  <h2>Ask the agent</h2>
-  <div id='chat'></div>
-  <form id='askform'>
-    <input id='q' autocomplete='off'
-      placeholder='e.g. Top 3 services and month-over-month trend for 2026-01-01 to 2026-07-01'>
-    <button type='submit'>Ask</button>
+<div class="mc-chat">
+  <div class="mc-head">Ask the agent</div>
+  <div id="chat" class="mc-log"></div>
+  <form id="askform" class="mc-form">
+    <input id="q" autocomplete="off"
+      placeholder="e.g. Top 3 services by cost from 2026-01-01 to 2026-07-01">
+    <button type="submit">Ask</button>
   </form>
-  <div class='foot'>Answers come only from validated queries &amp; calculations —
-  numbers are never invented by the model.</div>
+  <div class="mc-foot">Answers come only from validated queries &amp; calculations —
+  numbers are never invented by the model, and any untraceable figure is flagged.</div>
 </div>
 <style>
-#chat{max-height:340px;overflow-y:auto;margin-bottom:12px}
-#chat .msg{padding:9px 12px;border-radius:10px;margin:6px 0;font-size:13px;white-space:pre-wrap;
-  line-height:1.45}
-#chat .you{background:#eef2ff;color:#1f2328;margin-left:60px}
-#chat .agent{background:#f6f8fa;border:1px solid #eaeef2;margin-right:60px}
-#chat .pending{color:#8b949e;font-style:italic}
-#askform{display:flex;gap:8px}
-#q{flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:8px;font-size:13px}
-#askform button{padding:10px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;
-  font-weight:600;cursor:pointer}
-#askform button:disabled{opacity:.5;cursor:default}
+.mc-chat{background:var(--surface,#fcfcfb);border:1px solid var(--border,rgba(11,11,11,.1));
+  border-radius:14px;padding:18px 20px;margin-bottom:18px;
+  box-shadow:0 1px 2px rgba(11,11,11,.04),0 4px 18px rgba(11,11,11,.05)}
+.mc-head{font-size:14px;font-weight:640;margin-bottom:12px;color:var(--ink,#0b0b0b)}
+.mc-log{max-height:340px;overflow-y:auto;margin-bottom:12px;display:flex;flex-direction:column;gap:8px}
+.mc-log:empty{display:none}
+.mc-msg{padding:10px 13px;border-radius:12px;font-size:13px;white-space:pre-wrap;
+  line-height:1.5;max-width:84%}
+.mc-you{align-self:flex-end;background:#2a78d6;color:#fff}
+.mc-agent{align-self:flex-start;background:var(--plane,#f1f1ee);color:var(--ink,#0b0b0b);
+  border:1px solid var(--border,rgba(11,11,11,.1))}
+.mc-pending{opacity:.6;font-style:italic}
+.mc-form{display:flex;gap:8px}
+#q{flex:1;padding:11px 13px;border:1px solid var(--border,rgba(11,11,11,.18));border-radius:9px;
+  font-size:13px;background:var(--plane,#fff);color:var(--ink,#0b0b0b)}
+#q:focus{outline:2px solid #2a78d6;outline-offset:-1px;border-color:#2a78d6}
+.mc-form button{padding:11px 20px;border:0;border-radius:9px;background:#2a78d6;color:#fff;
+  font-weight:600;font-size:13px;cursor:pointer}
+.mc-form button:disabled{opacity:.5;cursor:default}
+.mc-foot{color:var(--muted,#898781);font-size:11px;margin-top:9px}
+@media (prefers-color-scheme:dark){
+  .mc-chat{background:#1a1a19;border-color:rgba(255,255,255,.1)}
+  .mc-agent{background:#0d0d0d;border-color:rgba(255,255,255,.1);color:#fff}
+  #q{background:#0d0d0d;border-color:rgba(255,255,255,.18);color:#fff}
+  .mc-head{color:#fff}
+}
 </style>
 <script>
 (function(){
   const form=document.getElementById('askform'), q=document.getElementById('q'),
         chat=document.getElementById('chat'), btn=form.querySelector('button');
-  function add(who,text){const d=document.createElement('div');d.className='msg '+who;
+  function add(who,text){const d=document.createElement('div');
+    d.className='mc-msg '+(who==='you'?'mc-you':'mc-agent');
     d.textContent=text;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const question=q.value.trim(); if(!question) return;
     add('you',question); q.value=''; btn.disabled=true;
-    const pending=add('agent','thinking…'); pending.classList.add('pending');
+    const pending=add('agent','thinking…'); pending.classList.add('mc-pending');
     try{
       const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({question})});
       const j=await r.json();
       pending.textContent=j.answer||j.error||'(no answer)';
     }catch(err){ pending.textContent='Error: '+err; }
-    pending.classList.remove('pending'); btn.disabled=false; q.focus();
+    pending.classList.remove('mc-pending'); btn.disabled=false; q.focus();
   });
 })();
 </script>
@@ -97,9 +113,11 @@ _FALLBACK = (
 
 
 def _with_chat(html: str) -> str:
-    """Inject the chat panel right after the page title."""
-    for title in ("<h1>Multi-Cloud Cost Report</h1>", "<h1>Multi-Cloud Cost Agent</h1>"):
-        if title in html:
+    """Inject the chat panel at the top of the dashboard (just below the header)."""
+    if "</header>" in html:  # the dashboard report
+        return html.replace("</header>", "</header>" + _CHAT_HTML, 1)
+    for title in ("<h1>Multi-Cloud Cost Dashboard</h1>", "<h1>Multi-Cloud Cost Agent</h1>"):
+        if title in html:  # the fallback page
             return html.replace(title, title + _CHAT_HTML, 1)
     return html + _CHAT_HTML
 

@@ -8,6 +8,7 @@ function of a data dict, so it is unit-testable without a database.
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import UTC, date, datetime
 from html import escape
 from typing import Any
@@ -54,6 +55,10 @@ def build_report_data(
     )
     routing = route(repo, start, end, budget_month=end)
     providers = run_query(repo, "spend_by_provider", window).rows
+    # Recent daily history (tail of the window) so the forecast chart is a continuous
+    # daily curve, not just an aggregate — grounded in the daily_spend query.
+    tail_start = max(start, _minus_months(end, 2))
+    daily = run_query(repo, "daily_spend", {"start": tail_start, "end": end}).rows
 
     billed, effective = _f(total["billed_cost"]), _f(total["effective_cost"])
     return {
@@ -82,6 +87,7 @@ def build_report_data(
             }
             for r in mom
         ],
+        "daily": [{"date": r["day"].isoformat(), "amount": _f(r["amount"])} for r in daily],
         "forecast": {
             "model": forecast.model,
             "horizon": forecast.horizon,
@@ -89,6 +95,15 @@ def build_report_data(
             "mid": sum(_f(p.yhat) for p in forecast.points),
             "lo": sum(_f(p.lower) for p in forecast.points),
             "hi": sum(_f(p.upper) for p in forecast.points),
+            "points": [
+                {
+                    "date": p.date.isoformat(),
+                    "yhat": _f(p.yhat),
+                    "lo": _f(p.lower),
+                    "hi": _f(p.upper),
+                }
+                for p in forecast.points
+            ],
         },
         "budget": None
         if bs is None
@@ -132,8 +147,175 @@ def build_report_data(
     }
 
 
+# Categorical palette slots (identity encoding) — validated light/dark hues, fixed order.
+_CAT = ("var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)")
+
+
+def _short_date(iso: str) -> str:
+    return datetime.fromisoformat(iso).strftime("%b %d")
+
+
+def _svg_forecast_area(
+    daily: list[dict[str, Any]], points: list[dict[str, Any]], interval: float
+) -> str:
+    """Daily spend history flowing into the forecast, with a shaded uncertainty band."""
+    if not daily or not points:
+        return ""
+    w, h = 760, 280
+    pl, pr, pt, pb = 56, 18, 16, 34
+    hist = [d["amount"] for d in daily]
+    fy = [p["yhat"] for p in points]
+    flo = [p["lo"] for p in points]
+    fhi = [p["hi"] for p in points]
+    hi_pts, m = len(daily), len(points)
+    n = hi_pts + m
+    vmax = max([*hist, *fhi]) * 1.06
+    vmin = min([*hist, *flo]) * 0.94
+    if vmax <= vmin:
+        vmax = vmin + 1
+
+    def px(i: float) -> float:
+        return pl + i * ((w - pl - pr) / max(1, n - 1))
+
+    def py(v: float) -> float:
+        return h - pb - (v - vmin) / (vmax - vmin) * (h - pt - pb)
+
+    p = [
+        f'<svg id="fc-chart" viewBox="0 0 {w} {h}" width="100%" role="img" '
+        'aria-label="Daily spend history and forecast">'
+    ]
+    # Recessive gridlines + tabular y labels.
+    for t in range(5):
+        v = vmin + (vmax - vmin) * t / 4
+        y = py(v)
+        p.append(
+            f'<line x1="{pl}" y1="{y:.1f}" x2="{w - pr}" y2="{y:.1f}" '
+            'style="stroke:var(--grid)" stroke-width="1"/>'
+        )
+        p.append(
+            f'<text x="{pl - 8}" y="{y + 3:.1f}" text-anchor="end" font-size="10" '
+            f'style="fill:var(--muted)" font-variant-numeric="tabular-nums">${v / 1000:.1f}k</text>'
+        )
+    # Uncertainty band (lo..hi across the forecast region).
+    top = [f"{px(hi_pts + i):.1f},{py(fhi[i]):.1f}" for i in range(m)]
+    bot = [f"{px(hi_pts + i):.1f},{py(flo[i]):.1f}" for i in reversed(range(m))]
+    p.append(f'<polygon points="{" ".join(top + bot)}" style="fill:var(--band)"/>')
+    # History line (solid) then forecast line (dashed), joined at the boundary.
+    hline = " ".join(f"{px(i):.1f},{py(hist[i]):.1f}" for i in range(hi_pts))
+    p.append(f'<polyline fill="none" style="stroke:var(--s1)" stroke-width="2" points="{hline}"/>')
+    fline = [f"{px(hi_pts - 1):.1f},{py(hist[-1]):.1f}"]
+    fline += [f"{px(hi_pts + i):.1f},{py(fy[i]):.1f}" for i in range(m)]
+    p.append(
+        f'<polyline fill="none" style="stroke:var(--s1)" stroke-width="2" '
+        f'stroke-dasharray="5 4" points="{" ".join(fline)}"/>'
+    )
+    # Boundary divider (history | forecast).
+    bx = (px(hi_pts - 1) + px(hi_pts)) / 2
+    p.append(
+        f'<line x1="{bx:.1f}" y1="{pt}" x2="{bx:.1f}" y2="{h - pb}" '
+        'style="stroke:var(--axis)" stroke-width="1" stroke-dasharray="3 3"/>'
+    )
+    p.append(
+        f'<text x="{bx + 4:.1f}" y="{pt + 10}" font-size="10" '
+        'style="fill:var(--muted)">forecast &rarr;</text>'
+    )
+    # Endpoint marker + direct label (with a native hover tooltip).
+    ex, ey = px(n - 1), py(fy[-1])
+    p.append(
+        f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="4" style="fill:var(--s1)"><title>'
+        f"Projected {_short_date(points[-1]['date'])}: ${fy[-1]:,.0f} "
+        f"({int(interval * 100)}% range ${flo[-1]:,.0f}-${fhi[-1]:,.0f})</title></circle>"
+    )
+    p.append(
+        f'<text x="{ex - 6:.1f}" y="{ey - 8:.1f}" text-anchor="end" font-size="10" '
+        f'font-weight="600" style="fill:var(--s1)">${fy[-1]:,.0f}/day</text>'
+    )
+    # X labels: first, boundary, last.
+    for i, lab, anchor in (
+        (0, daily[0]["date"], "start"),
+        (hi_pts, points[0]["date"], "middle"),
+        (n - 1, points[-1]["date"], "end"),
+    ):
+        p.append(
+            f'<text x="{px(i):.1f}" y="{h - pb + 16:.1f}" text-anchor="{anchor}" font-size="10" '
+            f'style="fill:var(--muted)">{_short_date(lab)}</text>'
+        )
+    # Hover layer: a crosshair + focus dot the script moves, and a transparent capture rect
+    # spanning the plot area (kept last so it receives the pointer events).
+    p.append(f'<line class="fc-cross" x1="{pl}" y1="{pt}" x2="{pl}" y2="{h - pb}"/>')
+    p.append(f'<circle class="fc-focus" cx="{pl}" cy="{pt}" r="4.5"/>')
+    p.append(
+        f'<rect class="fc-hit" x="{pl}" y="{pt}" width="{w - pl - pr}" height="{h - pt - pb}"/>'
+    )
+    p.append("</svg>")
+
+    # Per-day data for the tooltip (viewBox coords + label + value + band), embedded inline.
+    marks: list[dict[str, Any]] = []
+    for i in range(hi_pts):
+        marks.append(
+            {
+                "x": round(px(i), 1),
+                "y": round(py(hist[i]), 1),
+                "l": _short_date(daily[i]["date"]),
+                "v": round(hist[i]),
+                "k": "a",
+            }
+        )
+    for i in range(m):
+        marks.append(
+            {
+                "x": round(px(hi_pts + i), 1),
+                "y": round(py(fy[i]), 1),
+                "l": _short_date(points[i]["date"]),
+                "v": round(fy[i]),
+                "k": "f",
+                "lo": round(flo[i]),
+                "hi": round(fhi[i]),
+            }
+        )
+    p.append('<div id="fc-tip" class="fc-tip"></div>')
+    js = (
+        _FORECAST_JS.replace("__PTS__", json.dumps(marks))
+        .replace("__PCT__", str(int(interval * 100)))
+        .replace("__W__", str(w))
+        .replace("__H__", str(h))
+    )
+    p.append(f"<script>{js}</script>")
+    return "".join(p)
+
+
+# Hover interaction for the forecast chart: on pointer move over the plot, snap to the
+# nearest day, move the crosshair + focus dot, and show a tooltip with that day's value
+# (and the prediction band for forecast days). Pure client JS, no external libraries.
+_FORECAST_JS = (
+    "(function(){var s=document.getElementById('fc-chart');if(!s)return;"
+    "var pts=__PTS__,pct=__PCT__,W=__W__,H=__H__;"
+    "var cr=s.querySelector('.fc-cross'),fo=s.querySelector('.fc-focus'),"
+    "hit=s.querySelector('.fc-hit'),tip=document.getElementById('fc-tip');"
+    "function fmt(x){return x.toLocaleString('en-US');}"
+    "function tog(o){var v=o?'1':'0';cr.style.opacity=v;fo.style.opacity=v;"
+    "tip.style.display=o?'block':'none';}"
+    "function mv(e){var r=s.getBoundingClientRect();var fx=(e.clientX-r.left)/r.width*W;"
+    "var b=pts[0],bd=1e9,i;for(i=0;i<pts.length;i++){var d=Math.abs(pts[i].x-fx);"
+    "if(d<bd){bd=d;b=pts[i];}}"
+    "cr.setAttribute('x1',b.x);cr.setAttribute('x2',b.x);"
+    "fo.setAttribute('cx',b.x);fo.setAttribute('cy',b.y);tog(true);"
+    "var t='<b>'+b.l+'</b><br>'+(b.k==='f'?'forecast ':'')+'$'+fmt(b.v)+'/day';"
+    "if(b.k==='f'){t+='<br><span class=\"fc-muted\">'+pct+'%: $'+fmt(b.lo)+'-$'+fmt(b.hi)"
+    "+'</span>';}tip.innerHTML=t;"
+    "var lx=b.x/W*r.width,ly=b.y/H*r.height;"
+    "tip.style.left=Math.max(4,Math.min(r.width-152,lx+12))+'px';"
+    "tip.style.top=Math.max(4,ly-10)+'px';}"
+    "hit.addEventListener('mousemove',mv);"
+    "hit.addEventListener('mouseleave',function(){tog(false);});"
+    "hit.addEventListener('touchstart',function(e){mv(e.touches[0]);},{passive:true});"
+    "hit.addEventListener('touchmove',function(e){mv(e.touches[0]);},{passive:true});"
+    "})();"
+)
+
+
 def _svg_trend(months: list[dict[str, Any]], forecast: dict[str, Any]) -> str:
-    """A compact monthly-trend line with the forecast point + 80% whisker."""
+    """Fallback compact monthly-trend line + forecast whisker (used when no daily series)."""
     if not months:
         return ""
     w, h, pad = 680, 210, 44
@@ -153,142 +335,247 @@ def _svg_trend(months: list[dict[str, Any]], forecast: dict[str, Any]) -> str:
 
     parts = [f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="Spend trend">']
     parts.append(
-        f'<line x1="{pad}" y1="{h - pad}" x2="{w - pad}" y2="{h - pad}" stroke="#d0d7de"/>'
+        f'<line x1="{pad}" y1="{h - pad}" x2="{w - pad}" y2="{h - pad}" '
+        'style="stroke:var(--grid)"/>'
     )
     line = " ".join(f"{px(i):.1f},{py(m['amount']):.1f}" for i, m in enumerate(months))
-    parts.append(f'<polyline fill="none" stroke="#2563eb" stroke-width="2.5" points="{line}"/>')
-    for i, m in enumerate(months):
-        parts.append(f'<circle cx="{px(i):.1f}" cy="{py(m["amount"]):.1f}" r="3" fill="#2563eb"/>')
+    parts.append(
+        f'<polyline fill="none" style="stroke:var(--s1)" stroke-width="2.5" points="{line}"/>'
+    )
+    for i, mm in enumerate(months):
+        parts.append(
+            f'<circle cx="{px(i):.1f}" cy="{py(mm["amount"]):.1f}" r="3" style="fill:var(--s1)"/>'
+        )
         parts.append(
             f'<text x="{px(i):.1f}" y="{h - pad + 16}" font-size="10" text-anchor="middle" '
-            f'fill="#57606a">{escape(m["label"])}</text>'
+            f'style="fill:var(--muted)">{escape(mm["label"])}</text>'
         )
     fx = px(n - 1)
-    # dashed connector history -> forecast
     parts.append(
         f'<line x1="{px(n - 2):.1f}" y1="{py(months[-1]["amount"]):.1f}" x2="{fx:.1f}" '
-        f'y2="{py(mid):.1f}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 4"/>'
+        f'y2="{py(mid):.1f}" style="stroke:var(--s3)" stroke-width="2" stroke-dasharray="5 4"/>'
     )
-    # 80% uncertainty whisker
     parts.append(
         f'<line x1="{fx:.1f}" y1="{py(lo):.1f}" x2="{fx:.1f}" y2="{py(hi):.1f}" '
-        f'stroke="#f59e0b" stroke-width="2"/>'
+        f'style="stroke:var(--s3)" stroke-width="2"/>'
     )
     for v in (lo, hi):
         parts.append(
             f'<line x1="{fx - 5:.1f}" y1="{py(v):.1f}" x2="{fx + 5:.1f}" y2="{py(v):.1f}" '
-            f'stroke="#f59e0b" stroke-width="2"/>'
+            f'style="stroke:var(--s3)" stroke-width="2"/>'
         )
-    parts.append(f'<circle cx="{fx:.1f}" cy="{py(mid):.1f}" r="4" fill="#f59e0b"/>')
+    parts.append(f'<circle cx="{fx:.1f}" cy="{py(mid):.1f}" r="4" style="fill:var(--s3)"/>')
     parts.append(
         f'<text x="{fx:.1f}" y="{h - pad + 16}" font-size="10" text-anchor="middle" '
-        f'fill="#b45309">Forecast</text>'
+        f'style="fill:var(--muted)">Forecast</text>'
     )
     parts.append("</svg>")
     return "".join(parts)
 
 
+def _cat_bars(items: list[dict[str, Any]]) -> str:
+    """Horizontal bars colored per entity (identity) — for providers/teams."""
+    maxv = max((it["amount"] for it in items), default=1.0) or 1.0
+    return "".join(
+        f'<div class="brow"><span class="bname" title="{escape(it["name"])}">'
+        f'{escape(it["name"])}</span><span class="btrack"><span class="bfill" '
+        f'style="width:{it["amount"] / maxv * 100:.1f}%;background:{_CAT[i % len(_CAT)]}"></span>'
+        f'</span><span class="bamt">{_money(it["amount"])}</span></div>'
+        for i, it in enumerate(items)
+    )
+
+
+def _mag_bars(items: list[dict[str, Any]]) -> str:
+    """Horizontal bars in one hue (magnitude) — for ranked service spend."""
+    maxv = max((it["amount"] for it in items), default=1.0) or 1.0
+    return "".join(
+        f'<div class="brow"><span class="bname" title="{escape(it["name"])}">'
+        f'{escape(it["name"])}</span><span class="btrack"><span class="bfill" '
+        f'style="width:{it["amount"] / maxv * 100:.1f}%;background:var(--s1)"></span></span>'
+        f'<span class="bamt">{_money(it["amount"])}</span></div>'
+        for it in items
+    )
+
+
 _CSS = """
-body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;
-background:#f6f8fa;color:#1f2328}
-.wrap{max-width:900px;margin:0 auto;padding:32px}
-h1{font-size:22px;margin:0 0 4px}.sub{color:#57606a;font-size:13px;margin-bottom:24px}
-.cards{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:28px}
-.card{flex:1;min-width:180px;background:#fff;border:1px solid #d0d7de;
-border-radius:10px;padding:16px}
-.card .k{color:#57606a;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-.card .v{font-size:22px;font-weight:600;margin-top:6px}
-.card .n{font-size:12px;color:#57606a;margin-top:4px}
-.panel{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:20px;margin-bottom:24px}
-.panel h2{font-size:15px;margin:0 0 14px}
-.bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px}
-.bar-row .name{width:230px;color:#1f2328}.bar-row .amt{width:96px;text-align:right;color:#57606a}
-.bar{flex:1;height:14px;background:#eaeef2;border-radius:7px;overflow:hidden}
-.bar>span{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#60a5fa)}
+*{box-sizing:border-box}
+:root{
+--plane:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+--grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);
+--s1:#2a78d6;--s2:#1baf7a;--s3:#eda100;--s4:#008300;--s5:#4a3aa7;--s6:#e34948;
+--band:rgba(42,120,214,.15);--good:#0ca30c;--serious:#ec835a;--crit:#d03b3b;
+--shadow:0 1px 2px rgba(11,11,11,.04),0 4px 18px rgba(11,11,11,.05)}
+@media (prefers-color-scheme:dark){:root{
+--plane:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+--grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);
+--s1:#3987e5;--s2:#199e70;--s3:#c98500;--s4:#008300;--s5:#9085e9;--s6:#e66767;
+--band:rgba(57,135,229,.22);--good:#0ca30c;--serious:#ec835a;--crit:#e05656;
+--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.4)}}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;
+background:var(--plane);color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 24px 56px}
+.hd{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:22px}
+h1{font-size:22px;font-weight:650;margin:0;letter-spacing:-.01em}
+.sub{color:var(--ink2);font-size:12.5px;margin-top:5px}
+.live{font-size:11px;color:var(--good);font-weight:600;white-space:nowrap;padding-top:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
+.tile{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--s1);
+border-radius:13px;padding:15px 16px;box-shadow:var(--shadow)}
+.tile .k{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;
+letter-spacing:.05em}
+.tile .v{font-size:25px;font-weight:650;margin-top:7px;letter-spacing:-.02em}
+.tile .n{font-size:11.5px;color:var(--ink2);margin-top:4px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+padding:18px 20px;margin-bottom:18px;box-shadow:var(--shadow)}
+.card-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px}
+.card h2{font-size:14px;font-weight:640;margin:0}
+.tag{font-size:11px;color:var(--ink2);background:var(--plane);border:1px solid var(--border);
+padding:2px 9px;border-radius:20px;white-space:nowrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:720px){.grid2{grid-template-columns:1fr}}
+.chart{position:relative;margin:2px -4px}
+.fc-cross{stroke:var(--axis);stroke-width:1;stroke-dasharray:3 3;opacity:0;pointer-events:none}
+.fc-focus{fill:var(--s1);stroke:var(--surface);stroke-width:1.5;opacity:0;pointer-events:none}
+.fc-hit{fill:transparent;cursor:crosshair}
+.fc-tip{position:absolute;display:none;pointer-events:none;z-index:6;white-space:nowrap;
+transform:translateY(-100%);background:var(--surface);color:var(--ink);
+border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:11.5px;
+line-height:1.45;box-shadow:var(--shadow);font-variant-numeric:tabular-nums}
+.fc-muted{color:var(--muted)}
+.brow{display:flex;align-items:center;gap:12px;margin:9px 0;font-size:13px}
+.bname{width:210px;flex:none;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btrack{flex:1;height:11px;background:var(--grid);border-radius:6px;overflow:hidden}
+.bfill{display:block;height:100%;border-radius:6px}
+.bamt{width:100px;flex:none;text-align:right;color:var(--ink2);font-variant-numeric:tabular-nums}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:right;padding:6px 8px;border-bottom:1px solid #eaeef2}
-th:first-child,td:first-child{text-align:left}
-.up{color:#cf222e}.down{color:#1a7f37}
-.foot{color:#8b949e;font-size:11px;margin-top:8px}
-.badge{font-size:11px;padding:2px 9px;border-radius:11px;margin-left:8px;font-weight:600}
-.bover{background:#ffe3e3;color:#cf222e}.brisk{background:#fff3cd;color:#b45309}
-.bok{background:#dafbe1;color:#1a7f37}
+th,td{text-align:right;padding:8px;border-bottom:1px solid var(--border);
+font-variant-numeric:tabular-nums}
+th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
+.up{color:var(--crit)}.down{color:var(--good)}
+.foot{color:var(--muted);font-size:11px;margin-top:10px}
+.badge{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600;white-space:nowrap;
+display:inline-flex;align-items:center;gap:6px;background:var(--plane);
+border:1px solid var(--border);color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.meter{position:relative;height:26px;background:var(--grid);border-radius:8px;
+overflow:hidden;margin:6px 0 4px}
+.meter-proj,.meter-actual{position:absolute;top:0;bottom:0;left:0;border-radius:8px 0 0 8px}
+.meter-actual{opacity:.6}
+.meter-budget{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
+.mlabel{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:14px}
+.minis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.mini{background:var(--plane);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.mini .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;
+letter-spacing:.04em;font-weight:600}
+.mini .v{font-size:16px;font-weight:640;margin-top:3px;font-variant-numeric:tabular-nums}
 """
 
 
 def render_html(data: dict[str, Any]) -> str:
-    """Render the report HTML from a data dict (pure function)."""
+    """Render the dashboard HTML from a data dict (pure function)."""
     fc = data["forecast"]
+    pct = int(fc["interval"] * 100)
     services = data["services"]
-    max_amt = max((s["amount"] for s in services), default=1.0) or 1.0
+    providers = data.get("providers", [])
+    teams = data.get("teams", [])
+    provider_label = " + ".join(p["name"] for p in providers) or "AWS"
 
-    cards = [
-        ("Total billed", _money(data["total_billed"]), f"{data['start']} to {data['end']}"),
-        ("Effective (amortized)", _money(data["total_effective"]), "after RI/SP amortization"),
-        ("Commitment savings", _money(data["savings"]), "billed − effective"),
+    # Hero chart: daily area+band when we have the daily series, else the monthly fallback.
+    if data.get("daily") and fc.get("points"):
+        chart = _svg_forecast_area(data["daily"], fc["points"], fc["interval"])
+    else:
+        chart = _svg_trend(data["months"], fc)
+
+    # KPI tiles.
+    tiles = [
+        ("Total billed", _money(data["total_billed"]), f"{data['start']} → {data['end']}", "s1"),
+        (
+            "Effective (amortized)",
+            _money(data["total_effective"]),
+            "after RI/SP amortization",
+            "s2",
+        ),
+        ("Commitment savings", _money(data["savings"]), "billed − effective", "s4"),
         (
             f"Forecast next {fc['horizon']}d",
             _money(fc["mid"]),
-            f"{int(fc['interval'] * 100)}% range {_money(fc['lo'])}–{_money(fc['hi'])}",
+            f"{pct}% range {_money(fc['lo'])}–{_money(fc['hi'])}",
+            "s3",
         ),
     ]
-    card_html = "".join(
-        f'<div class="card"><div class="k">{escape(k)}</div>'
-        f'<div class="v">{escape(v)}</div><div class="n">{escape(n)}</div></div>'
-        for k, v, n in cards
+    kpi_html = "".join(
+        f'<div class="tile" style="border-left-color:var(--{c})">'
+        f'<div class="k">{escape(k)}</div><div class="v">{escape(v)}</div>'
+        f'<div class="n">{escape(n)}</div></div>'
+        for k, v, n, c in tiles
     )
 
-    bars = "".join(
-        f'<div class="bar-row"><div class="name">{escape(s["name"])}</div>'
-        f'<div class="bar"><span style="width:{s["amount"] / max_amt * 100:.1f}%"></span></div>'
-        f'<div class="amt">{_money(s["amount"])}</div></div>'
-        for s in services
+    provider_panel = (
+        '<div class="card"><div class="card-h"><h2>Spend by cloud provider</h2></div>'
+        f"{_cat_bars(providers)}</div>"
+        if providers
+        else ""
     )
-
-    rows = []
-    for m in data["months"]:
-        if m["delta_pct"] is None:
-            delta = "—"
-        else:
-            cls = "up" if m["delta_pct"] > 0 else "down"
-            delta = f'<span class="{cls}">{m["delta_pct"]:+.1f}%</span>'
-        rows.append(
-            f"<tr><td>{escape(m['label'])}</td><td>{_money(m['amount'])}</td><td>{delta}</td></tr>"
-        )
-    mom_table = "".join(rows)
+    team_panel = (
+        '<div class="card"><div class="card-h"><h2>Spend by team (attribution)</h2></div>'
+        f"{_cat_bars(teams)}"
+        "<div class='foot'>Untagged spend shows honestly as 'unattributed'.</div></div>"
+        if teams
+        else ""
+    )
+    grid2 = (
+        f'<section class="grid2">{provider_panel}{team_panel}</section>'
+        if (provider_panel or team_panel)
+        else ""
+    )
 
     budget = data.get("budget")
     if budget:
-        badge_cls = {"OVER": "bover", "AT_RISK": "brisk", "ON_TRACK": "bok"}.get(
-            budget["status"], "bok"
-        )
+        scolor = {
+            "OVER": "var(--crit)",
+            "AT_RISK": "var(--serious)",
+            "ON_TRACK": "var(--good)",
+        }.get(budget["status"], "var(--good)")
         label = {"OVER": "Over budget", "AT_RISK": "At risk", "ON_TRACK": "On track"}.get(
             budget["status"], budget["status"]
         )
+        scale = (max(budget["projected"], budget["budget"]) or 1.0) * 1.08
+        proj_x = min(100.0, budget["projected"] / scale * 100)
+        act_x = min(100.0, budget["actual"] / scale * 100)
+        bud_x = min(100.0, budget["budget"] / scale * 100)
+        minis = [
+            ("Monthly budget", _money(budget["budget"])),
+            ("Actual so far", _money(budget["actual"])),
+            ("Projected month-end", _money(budget["projected"])),
+            ("Variance", f"{_money(budget['variance'])} ({budget['variance_pct']:+.1f}%)"),
+        ]
+        mini_html = "".join(
+            f'<div class="mini"><div class="k">{escape(k)}</div>'
+            f'<div class="v">{escape(v)}</div></div>'
+            for k, v in minis
+        )
         budget_panel = (
-            f"<div class='panel'><h2>Budget — {escape(budget['month'])} "
-            f"<span class='badge {badge_cls}'>{escape(label)}</span></h2><div class='cards'>"
-            f"<div class='card'><div class='k'>Monthly budget</div>"
-            f"<div class='v'>{_money(budget['budget'])}</div></div>"
-            f"<div class='card'><div class='k'>Actual so far</div>"
-            f"<div class='v'>{_money(budget['actual'])}</div></div>"
-            f"<div class='card'><div class='k'>Projected month-end</div>"
-            f"<div class='v'>{_money(budget['projected'])}</div>"
-            f"<div class='n'>range {_money(budget['projected_lo'])}–"
-            f"{_money(budget['projected_hi'])}</div></div>"
-            f"<div class='card'><div class='k'>Variance</div>"
-            f"<div class='v'>{_money(budget['variance'])}</div>"
-            f"<div class='n'>{budget['variance_pct']:+.1f}% vs budget</div></div>"
-            "</div></div>"
+            f'<div class="card"><div class="card-h"><h2>Budget — {escape(budget["month"])}</h2>'
+            f'<span class="badge"><span class="dot" style="background:{scolor}"></span>'
+            f"{escape(label)}</span></div>"
+            f'<div class="meter">'
+            f'<span class="meter-proj" style="width:{proj_x:.1f}%;background:{scolor}"></span>'
+            f'<span class="meter-actual" style="width:{act_x:.1f}%;background:{scolor}"></span>'
+            f'<span class="meter-budget" style="left:{bud_x:.1f}%"></span></div>'
+            f'<div class="mlabel"><span>projected {_money(budget["projected"])}</span>'
+            f"<span>budget line {_money(budget['budget'])}</span></div>"
+            f'<div class="minis">{mini_html}</div></div>'
         )
     else:
         budget_panel = ""
 
     findings = data.get("findings", [])
     if findings:
-        sev_cls = {"HIGH": "bover", "MEDIUM": "brisk", "LOW": "bok"}
+        sev_color = {"HIGH": "var(--crit)", "MEDIUM": "var(--serious)", "LOW": "var(--good)"}
         finding_rows = "".join(
-            f"<tr><td><span class='badge {sev_cls.get(f['severity'], 'bok')}'>"
+            f'<tr><td><span class="badge"><span class="dot" '
+            f'style="background:{sev_color.get(f["severity"], "var(--good)")}"></span>'
             f"{escape(f['severity'])}</span></td>"
             f"<td>{escape(f['summary'])}<div class='foot' style='margin:3px 0 0'>&rarr; "
             f"{escape(f['recommendation'])}</div></td>"
@@ -296,7 +583,8 @@ def render_html(data: dict[str, Any]) -> str:
             for f in findings
         )
         findings_panel = (
-            f"<div class='panel'><h2>Recommended actions ({len(findings)})</h2>"
+            f'<div class="card"><div class="card-h">'
+            f"<h2>Recommended actions ({len(findings)})</h2></div>"
             "<table><thead><tr><th>Severity</th><th>Finding &amp; recommendation</th>"
             f"<th>Owner</th></tr></thead><tbody>{finding_rows}</tbody></table>"
             "<div class='foot'>Recommend-only — a human approves; nothing is executed.</div></div>"
@@ -321,28 +609,13 @@ def render_html(data: dict[str, Any]) -> str:
         or "<tr><td colspan='2'>None flagged.</td></tr>"
     )
     anomaly_panel = (
-        "<div class='panel'><h2>Detected anomalies</h2>"
+        '<div class="card"><div class="card-h"><h2>Detected anomalies</h2></div>'
         "<table><thead><tr><th>Spike date</th><th>Service</th><th>Cost</th>"
         f"<th>vs baseline</th></tr></thead><tbody>{spike_rows}</tbody></table>"
-        "<div class='foot' style='margin:12px 0 6px'>Steady structural spend "
+        "<div class='foot' style='margin:14px 0 6px'>Steady structural spend "
         "(flat &amp; persistent — review for waste):</div>"
         "<table><thead><tr><th>Service</th><th>Est. monthly</th></tr></thead>"
         f"<tbody>{steady_rows}</tbody></table></div>"
-    )
-
-    teams = data.get("teams", [])
-    max_team = max((t["amount"] for t in teams), default=1.0) or 1.0
-    team_bars = "".join(
-        f'<div class="bar-row"><div class="name">{escape(t["name"])}</div>'
-        f'<div class="bar"><span style="width:{t["amount"] / max_team * 100:.1f}%"></span></div>'
-        f'<div class="amt">{_money(t["amount"])}</div></div>'
-        for t in teams
-    )
-    team_panel = (
-        f"<div class='panel'><h2>Spend by team (attribution)</h2>{team_bars}"
-        "<div class='foot'>Untagged spend shows honestly as 'unattributed'.</div></div>"
-        if teams
-        else ""
     )
 
     drv = data.get("drivers")
@@ -355,51 +628,52 @@ def render_html(data: dict[str, Any]) -> str:
         )
         sign = "+" if drv["total_delta"] >= 0 else "−"
         drivers_panel = (
-            f"<div class='panel'><h2>What changed — {escape(drv['period'])} "
-            f"({sign}${abs(drv['total_delta']):,.2f} vs prior month)</h2>"
+            f'<div class="card"><div class="card-h"><h2>What changed — {escape(drv["period"])} '
+            f"({sign}${abs(drv['total_delta']):,.2f} vs prior month)</h2></div>"
             "<table><thead><tr><th>Service</th><th>This month</th><th>Δ vs prior</th></tr>"
             f"</thead><tbody>{driver_rows}</tbody></table></div>"
         )
     else:
         drivers_panel = ""
 
-    providers = data.get("providers", [])
-    provider_label = " + ".join(p["name"] for p in providers) or "AWS"
-    max_prov = max((p["amount"] for p in providers), default=1.0) or 1.0
-    provider_bars = "".join(
-        f'<div class="bar-row"><div class="name">{escape(p["name"])}</div>'
-        f'<div class="bar"><span style="width:{p["amount"] / max_prov * 100:.1f}%"></span></div>'
-        f'<div class="amt">{_money(p["amount"])}</div></div>'
-        for p in providers
-    )
-    provider_panel = (
-        f"<div class='panel'><h2>Spend by cloud provider</h2>{provider_bars}</div>"
-        if len(providers) > 1
-        else ""
+    mom_rows = []
+    for m in data["months"]:
+        if m["delta_pct"] is None:
+            delta = "—"
+        else:
+            cls = "up" if m["delta_pct"] > 0 else "down"
+            delta = f'<span class="{cls}">{m["delta_pct"]:+.1f}%</span>'
+        mom_rows.append(
+            f"<tr><td>{escape(m['label'])}</td><td>{_money(m['amount'])}</td><td>{delta}</td></tr>"
+        )
+    mom_panel = (
+        '<div class="card"><div class="card-h"><h2>Month over month</h2></div>'
+        "<table><thead><tr><th>Month</th><th>Billed</th><th>Δ vs prior</th></tr></thead>"
+        f"<tbody>{''.join(mom_rows)}</tbody></table></div>"
     )
 
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Cloud Cost Report</title><style>{_CSS}</style></head><body><div class='wrap'>"
-        "<h1>Multi-Cloud Cost Report</h1>"
-        f"<div class='sub'>{escape(provider_label)} • {escape(data['start'])} to "
-        f"{escape(data['end'])} • generated {escape(data['generated'])}</div>"
-        f"<div class='cards'>{card_html}</div>"
-        f"{provider_panel}"
+        f"<title>Cloud Cost Dashboard</title><style>{_CSS}</style></head><body><div class='wrap'>"
+        "<header class='hd'><div><h1>Multi-Cloud Cost Dashboard</h1>"
+        f"<div class='sub'>{escape(provider_label)} &middot; {escape(data['start'])} to "
+        f"{escape(data['end'])} &middot; generated {escape(data['generated'])}</div></div>"
+        "<div class='live'>&#9679; grounded &middot; every figure from a query</div></header>"
+        f"<section class='kpis'>{kpi_html}</section>"
+        "<div class='card'><div class='card-h'>"
+        f"<h2>Daily spend &amp; {fc['horizon']}-day forecast</h2>"
+        f"<span class='tag'>{pct}% interval</span></div><div class='chart'>{chart}</div>"
+        f"<div class='foot'>Model {escape(fc['model'])} &middot; shaded band = {pct}% "
+        "prediction interval &middot; from the daily_spend query + forecaster</div></div>"
         f"{budget_panel}"
+        f"{grid2}"
+        "<div class='card'><div class='card-h'><h2>Top services by usage cost</h2></div>"
+        f"{_mag_bars(services)}</div>"
         f"{findings_panel}"
-        f"<div class='panel'><h2>Monthly trend &amp; forecast</h2>"
-        f"{_svg_trend(data['months'], fc)}"
-        f"<div class='foot'>Forecast model: {escape(fc['model'])} · orange whisker = "
-        f"{int(fc['interval'] * 100)}% prediction interval</div></div>"
-        f"<div class='panel'><h2>Top services by usage cost</h2>{bars}</div>"
-        f"{team_panel}"
-        f"<div class='panel'><h2>Month over month</h2>"
-        f"<table><thead><tr><th>Month</th><th>Billed</th><th>Δ vs prior</th></tr></thead>"
-        f"<tbody>{mom_table}</tbody></table></div>"
         f"{drivers_panel}"
         f"{anomaly_panel}"
+        f"{mom_panel}"
         "<div class='foot'>Every figure is produced by a validated query, the forecaster, or "
         "a deterministic detector — never by a language model.</div>"
         "</div></body></html>"
