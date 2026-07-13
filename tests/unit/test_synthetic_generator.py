@@ -21,6 +21,7 @@ from mcca.ingestion.synthetic.generator import (
 
 START = date(2026, 1, 1)
 END = date(2026, 7, 1)  # 181 days: covers all default anomaly indices (38/95/150)
+_EC2_KEY = "Amazon Elastic Compute Cloud - Compute"
 
 
 def _usage_groups(bucket: dict) -> dict[str, dict]:
@@ -138,6 +139,32 @@ def test_no_negotiated_discount_collapses_list_to_billed() -> None:
     # With no enterprise discount, list == contracted == billed.
     assert Decimal(m["ListCost"]["Amount"]) == Decimal(m["UnblendedCost"]["Amount"])
     assert Decimal(m["ContractedCost"]["Amount"]) == Decimal(m["UnblendedCost"]["Amount"])
+
+
+def test_estimate_from_flags_and_scales_the_newest_day() -> None:
+    start, end = date(2026, 1, 1), date(2026, 1, 6)
+    est = build_response(
+        start, end, GeneratorConfig(estimate_from=date(2026, 1, 5), estimate_factor=0.5)
+    )
+    full = build_response(start, end)
+    eb = {b["TimePeriod"]["Start"]: b for b in est["ResultsByTime"]}
+    fb = {b["TimePeriod"]["Start"]: b for b in full["ResultsByTime"]}
+
+    assert eb["2026-01-04"]["Estimated"] is False
+    assert eb["2026-01-05"]["Estimated"] is True  # newest day is an estimate
+
+    def ec2(bkt: dict) -> Decimal:
+        return Decimal(_usage_groups(bkt)[_EC2_KEY]["Metrics"]["UnblendedCost"]["Amount"])
+
+    # The estimated day is scaled down; a full (final) generation of that day is higher.
+    assert ec2(eb["2026-01-05"]) < ec2(fb["2026-01-05"])
+    # Non-estimated days are identical between the two generations.
+    assert ec2(eb["2026-01-04"]) == ec2(fb["2026-01-04"])
+
+
+def test_no_estimate_from_marks_every_day_final() -> None:
+    resp = build_response(START, START.replace(day=4))
+    assert all(b["Estimated"] is False for b in resp["ResultsByTime"])
 
 
 def test_savings_plan_can_be_disabled() -> None:

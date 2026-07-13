@@ -149,6 +149,20 @@ def _linear_trend(series: pd.Series, horizon: int, interval: float):
     return mean, mean - band, mean + band, "linear-trend+residual-band"
 
 
+def _flat(series: pd.Series, horizon: int, interval: float):
+    """Flat forecast for degenerate input (one point or a constant series).
+
+    Repeats the last value with a nominal, widening uncertainty band. This deliberately
+    avoids a least-squares/ARIMA fit on too little data — such a fit emits LAPACK 'DLASCLS'
+    warnings and can return NaN. Uncertainty is still shown, never presented as certainty.
+    """
+    last = float(series.to_numpy(dtype=float)[-1])
+    z = float(norm.ppf(0.5 + interval / 2))
+    band = z * max(abs(last) * 0.1, 1.0) * np.sqrt(np.arange(1, horizon + 1))
+    mean = np.full(horizon, last)
+    return mean, mean - band, mean + band, "flat (insufficient history)"
+
+
 def forecast_series(
     history: list[tuple[date, float]],
     *,
@@ -164,9 +178,14 @@ def forecast_series(
         raise ValueError("horizon must be >= 1.")
 
     series = _to_series(history)
+    y = series.to_numpy(dtype=float)
 
-    # SARIMAX needs enough points to estimate the weekly cycle; else fall back.
-    if len(series) >= 2 * seasonal_period + 2:
+    # Degenerate history (a single point, non-finite values, or a constant series) can't be
+    # fit — a least-squares/ARIMA fit here spams LAPACK 'DLASCLS' warnings and may return NaN.
+    # Fall back to a flat forecast. Otherwise: SARIMAX with enough points, else linear trend.
+    if len(series) < 3 or not np.isfinite(y).all() or float(np.nanstd(y)) == 0.0:
+        mean, lower, upper, name = _flat(series, horizon, interval)
+    elif len(series) >= 2 * seasonal_period + 2:
         try:
             mean, lower, upper, name = _sarimax(series, horizon, interval, seasonal_period)
         except Exception:  # noqa: BLE001 - any fit failure -> transparent fallback

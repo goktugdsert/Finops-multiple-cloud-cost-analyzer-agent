@@ -189,6 +189,11 @@ class GeneratorConfig:
     # rates are the NEGOTIATED (contracted) rates you're billed, so ContractedCost == billed
     # for on-demand usage and the public ListCost sits above it: list = billed / (1 - edp).
     negotiated_discount: float = 0.10
+    # Estimate cadence (used by the live simulator): days on/after `estimate_from` are marked
+    # Estimated and their usage is scaled by `estimate_factor` (a partial-day estimate that a
+    # later re-ingest restates to the full value — exercising estimate->final reconciliation).
+    estimate_from: date | None = None
+    estimate_factor: float = 1.0
     anomalies: tuple[tuple[int, str, float], ...] = field(default=DEFAULT_ANOMALIES)
 
 
@@ -269,7 +274,7 @@ def _daily_usage(spec: ServiceSpec, day_index: int, day: date, config: Generator
 
 
 def _savings_plan_groups(
-    day_index: int, day: date, config: GeneratorConfig
+    day_index: int, day: date, config: GeneratorConfig, factor: Decimal = Decimal("1")
 ) -> list[dict[str, Any]]:
     """Emit the two line items an active Savings Plan produces on a given day.
 
@@ -279,7 +284,7 @@ def _savings_plan_groups(
     - SavingsPlanRecurringFee: the flat committed charge (a Purchase); it is what's invoiced,
       and it amortizes into the covered usage above so amortized totals stay consistent.
     """
-    usage = Decimal(str(_daily_usage(_SP_SPEC, day_index, day, config)))
+    usage = Decimal(str(_daily_usage(_SP_SPEC, day_index, day, config))) * factor
     on_demand = _SP_SPEC.rate * usage  # negotiated on-demand cost this usage displaces
     amortized = on_demand * Decimal(str(1 - config.sp_discount))  # SP cost for this usage
     fee = amortized  # recurring fee equals the amortized covered cost (consistent totals)
@@ -316,9 +321,14 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
         day = start + timedelta(days=day_index)
         groups: list[dict[str, Any]] = []
         taxable_unblended = Decimal("0")
+        # A day on/after estimate_from is a partial-day ESTIMATE: usage (and the cost derived
+        # from it) is scaled down; a later re-ingest with estimate_from past this day restates
+        # it to the full value.
+        estimated = bool(config.estimate_from and day >= config.estimate_from)
+        factor = Decimal(str(config.estimate_factor)) if estimated else Decimal("1")
 
         for spec in SERVICES:
-            usage = Decimal(str(_daily_usage(spec, day_index, day, config)))
+            usage = Decimal(str(_daily_usage(spec, day_index, day, config))) * factor
             unblended = spec.rate * usage
             amortized = unblended * Decimal(str(1 - spec.ri_savings))
             # For RI-covered services the consolidated BlendedCost reflects the amortized
@@ -345,7 +355,7 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
                 taxable_unblended += unblended
 
         if config.savings_plan:
-            groups.extend(_savings_plan_groups(day_index, day, config))
+            groups.extend(_savings_plan_groups(day_index, day, config, factor))
 
         if config.ec2_daily_ri_fee:
             fee = config.ec2_daily_ri_fee
@@ -370,7 +380,7 @@ def build_response(start: date, end: date, config: GeneratorConfig | None = None
                 },
                 "Total": {},
                 "Groups": groups,
-                "Estimated": False,
+                "Estimated": estimated,
             }
         )
 

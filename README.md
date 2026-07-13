@@ -19,7 +19,7 @@ an owner with a recommended action. It **recommends only; it never touches infra
 governance, an approval workflow, and a qualitative RAG knowledge base — see
 [Beyond the loop](#beyond-the-loop-v2)). All three clouds, the full FinOps loop, both pillars
 (unified visibility + predictive budgeting), an interactive dashboard, evals, and Langfuse
-tracing. **216 tests pass** (+1 intentionally skipped live-credential check).
+tracing. **223 tests pass** (+1 intentionally skipped live-credential check).
 
 **Honest scope:** there are no real cloud accounts — the agent runs on a deterministic
 **synthetic** dataset that emits each cloud's native billing shape. "Validated" means
@@ -113,6 +113,7 @@ uv run mcca-web            # interactive chat UI + dashboard at http://127.0.0.1
 uv run mcca "How much did we spend in total from 2026-01-01 to 2026-04-01?"
 uv run mcca-report        # generate a self-contained HTML dashboard
 uv run mcca-review        # review recommendations; approve/dismiss/snooze (human decisions)
+uv run mcca-simulate      # live near-real-time feed: +1 day/tick, estimate→final, monitor
 uv run mcca-eval          # agent eval: tool selection + prose numeric faithfulness (needs an LLM)
 uv run mcca-eval-numeric  # deterministic: every fixed query returns fixture-exact figures (no LLM)
 ```

@@ -50,6 +50,8 @@ mcca-eval = "mcca.eval.runner:main"
 mcca-eval-numeric = "mcca.eval.numeric:main"
 # Human approval CLI: review recommendations and record approve/dismiss/snooze decisions.
 mcca-review = "mcca.optimization.cli:main"
+# Live near-real-time data simulator (advances the clock one day per tick; idempotent ingest).
+mcca-simulate = "mcca.simulate:main"
 
 [dependency-groups]
 dev = [

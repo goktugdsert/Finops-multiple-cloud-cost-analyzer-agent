@@ -119,6 +119,14 @@ def test_ask_no_warning_when_every_figure_is_tool_sourced() -> None:
     assert "123.45" in body["answer"]
 
 
+def test_refresh_query_param_injects_meta_refresh() -> None:
+    client = _client()
+    live = client.get("/?refresh=5")
+    assert 'http-equiv="refresh"' in live.text and 'content="5"' in live.text
+    normal = client.get("/")
+    assert 'http-equiv="refresh"' not in normal.text  # off by default
+
+
 def test_decide_endpoint_is_wired() -> None:
     # The approval endpoint exists and routes to the decide() workflow. With the fake repo
     # no recommendation matches, so it returns an error — but a 200 with a JSON body proves

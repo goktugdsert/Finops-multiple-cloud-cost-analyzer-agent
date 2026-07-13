@@ -60,6 +60,25 @@ def test_bad_horizon_raises() -> None:
         forecast_series(_series(10), horizon=0)
 
 
+def test_degenerate_history_uses_flat_forecast_no_crash() -> None:
+    # One point, two points, and a constant series must NOT trigger a least-squares/ARIMA fit
+    # (which emits LAPACK 'DLASCLS' warnings and can return NaN) — they use a flat forecast.
+    one = forecast_series([(date(2026, 1, 1), 100.0)], horizon=5)
+    assert one.model.startswith("flat")
+    assert len(one.points) == 5
+    for p in one.points:
+        assert p.lower <= p.yhat <= p.upper  # finite, ordered — no NaN
+
+    two = forecast_series([(date(2026, 1, 1), 50.0), (date(2026, 1, 2), 50.0)], horizon=3)
+    assert two.model.startswith("flat")
+
+    constant = forecast_series(
+        [(date(2026, 1, 1) + timedelta(days=i), 42.0) for i in range(6)], horizon=4
+    )
+    assert constant.model.startswith("flat")
+    assert all(p.yhat == Decimal("42.00") for p in constant.points)
+
+
 def test_short_history_uses_linear_fallback_with_widening_band() -> None:
     # Weekly wiggle -> nonzero residuals -> a real (widening) uncertainty band.
     fc = forecast_series(_series(10, weekly=8.0), horizon=5, interval=0.8)

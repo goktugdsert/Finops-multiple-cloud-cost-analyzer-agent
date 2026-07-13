@@ -112,6 +112,12 @@ _FALLBACK = (
 )
 
 
+def _with_refresh(html: str, seconds: int) -> str:
+    """Inject a meta-refresh so the dashboard auto-reloads (for the live simulator)."""
+    tag = f'<meta http-equiv="refresh" content="{seconds}">'
+    return html.replace("<head>", "<head>" + tag, 1) if "<head>" in html else html
+
+
 def _with_chat(html: str) -> str:
     """Inject the chat panel at the top of the dashboard (just below the header)."""
     if "</header>" in html:  # the dashboard report
@@ -159,14 +165,18 @@ def create_app(repo: Any | None = None, model: Any | None = None, months: int = 
         return state["graph"]
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
+    def index(refresh: int | None = None) -> str:
         end = _first_of_month(date.today())
         start = _minus_months(end, months)
         try:
             html = render_html(build_report_data(repo, start, end))
         except Exception:  # noqa: BLE001 - empty/unreachable warehouse -> chat-only page
             html = _FALLBACK
-        return _with_chat(html)
+        page = _with_chat(html)
+        # ?refresh=N auto-reloads the page every N seconds — pairs with `mcca-simulate`.
+        if refresh and refresh > 0:
+            page = _with_refresh(page, refresh)
+        return page
 
     @app.post("/ask")
     def ask(body: AskRequest) -> dict[str, str]:
