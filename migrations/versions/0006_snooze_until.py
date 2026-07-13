@@ -22,9 +22,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE recommendation_decisions ADD COLUMN IF NOT EXISTS snooze_until DATE"
-    )
+    op.execute("ALTER TABLE recommendation_decisions ADD COLUMN IF NOT EXISTS snooze_until DATE")
 
 
 def downgrade() -> None:

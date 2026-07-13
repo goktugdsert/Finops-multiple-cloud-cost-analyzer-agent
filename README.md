@@ -19,7 +19,7 @@ an owner with a recommended action. It **recommends only; it never touches infra
 governance, an approval workflow, and a qualitative RAG knowledge base — see
 [Beyond the loop](#beyond-the-loop-v2)). All three clouds, the full FinOps loop, both pillars
 (unified visibility + predictive budgeting), an interactive dashboard, evals, and Langfuse
-tracing. **206 tests pass** (+1 intentionally skipped live-credential check).
+tracing. **216 tests pass** (+1 intentionally skipped live-credential check).
 
 **Honest scope:** there are no real cloud accounts — the agent runs on a deterministic
 **synthetic** dataset that emits each cloud's native billing shape. "Validated" means

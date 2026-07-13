@@ -489,8 +489,9 @@ letter-spacing:.04em;font-weight:600}
 .mini .v{font-size:16px;font-weight:640;margin-top:3px;font-variant-numeric:tabular-nums}
 .rec-status{font-size:11px;color:var(--ink2);font-weight:600}
 .rec-actions{white-space:nowrap}
-.rec-btn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;border:1px solid var(--border);
-background:var(--plane);color:var(--ink);cursor:pointer;margin-left:6px}
+.rec-btn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;
+border:1px solid var(--border);background:var(--plane);color:var(--ink);cursor:pointer;
+margin-left:6px}
 .rec-btn.ok:hover{border-color:var(--good);color:var(--good)}
 .rec-btn.no:hover{border-color:var(--crit);color:var(--crit)}
 .rec-btn:disabled{opacity:.5;cursor:default}
@@ -652,7 +653,7 @@ def render_html(data: dict[str, Any]) -> str:
             f'<tr data-key="{escape(r["key"])}">'
             f'<td><span class="badge"><span class="dot" '
             f'style="background:{sev_color.get(r["severity"], "var(--good)")}"></span>'
-            f'{escape(r["severity"])}</span></td>'
+            f"{escape(r['severity'])}</span></td>"
             f"<td>{escape(r['summary'])}<div class='foot' style='margin:3px 0 0'>&rarr; "
             f"{escape(r['action'])}</div></td>"
             f'<td class="rec-status">{escape(r["status"])}</td>'

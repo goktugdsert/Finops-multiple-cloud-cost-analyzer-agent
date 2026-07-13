@@ -92,11 +92,12 @@ def test_stored_policies_are_configurable(repo: PostgresRepository) -> None:
     assert all(v.recommendation for v in evaluate_policies(repo, START, END))
 
     # Add a strict custom policy -> a new violation appears, driven by stored config.
-    upsert_policy(repo, Policy("strict-untagged", "untagged_limit", {"max_fraction": 0.001}, "HIGH"))
+    strict = Policy("strict-untagged", "untagged_limit", {"max_fraction": 0.001}, "HIGH")
+    upsert_policy(repo, strict)
     vs = evaluate_policies(repo, START, END)
     assert any(v.policy_id == "strict-untagged" for v in vs)
 
     # Disabling a policy removes it from evaluation.
-    upsert_policy(repo, Policy("strict-untagged", "untagged_limit", {"max_fraction": 0.001}), enabled=False)
+    upsert_policy(repo, strict, enabled=False)
     vs2 = evaluate_policies(repo, START, END)
     assert not any(v.policy_id == "strict-untagged" for v in vs2)

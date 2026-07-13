@@ -103,7 +103,7 @@ clouds (handle discounts, credits, amortization, blended vs unblended).
 
 **TL;DR:** v1 is **feature-complete and validated on synthetic data.** All 7 build steps
 done, all 3 clouds, the full loop, both pillars, report + web chat UI + eval + Langfuse
-tracing. **206 tests passing (+1 explicitly-skipped live check), ruff clean, CI on push.**
+tracing. **216 tests passing (+1 explicitly-skipped live check), ruff clean, CI on push.**
 Runs on **synthetic data only** (no real cloud accounts — a standing project decision).
 
 Honest framing (do not overstate): "validated" means **provably correct against our own
@@ -254,7 +254,7 @@ clouds, sets a $9k budget). Then: `uv run mcca-web` (chat UI at 127.0.0.1:8000),
 `uv run mcca "question"` (CLI), `uv run mcca-report` (HTML), `uv run mcca-eval`
 (tool-selection + prose faithfulness), `uv run mcca-eval-numeric` (deterministic
 fixture-exact query check — no LLM), `uv run mcca-review` (human approval CLI:
-list/approve/dismiss recommendations), `uv run pytest` (206 tests, +1 skipped live check).
+list/approve/dismiss recommendations), `uv run pytest` (216 tests, +1 skipped live check).
 `mcca-seed --cloud {aws,azure,gcp,all}`. NOTE: `uv run pytest` DROPS the seeded data
 (integration fixtures drop_all at teardown) — re-seed afterward. Re-ingestion is now
 idempotent (upsert), so `mcca-seed` can be re-run without double-counting. Both `mcca-web`

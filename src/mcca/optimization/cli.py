@@ -57,7 +57,7 @@ def main() -> None:
         p.add_argument("--by", default=None, help="Who made the decision.")
         p.add_argument("--note", default=None, help="Optional note.")
         if name == "snooze":
-            p.add_argument("--until", default=None, help="Snooze until YYYY-MM-DD (re-surfaces after).")
+            p.add_argument("--until", default=None, help="Snooze until YYYY-MM-DD.")
             p.add_argument("--days", type=int, default=None, help="Snooze for N days from today.")
     args = parser.parse_args()
 

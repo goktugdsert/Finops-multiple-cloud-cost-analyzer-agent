@@ -114,8 +114,13 @@ def decide(
         )
     rec = matches[0]
     record_decision(
-        repo, rec.key, status,
-        decided_by=decided_by, note=note, snooze_until=snooze_until, snapshot=rec,
+        repo,
+        rec.key,
+        status,
+        decided_by=decided_by,
+        note=note,
+        snooze_until=snooze_until,
+        snapshot=rec,
     )
     from dataclasses import replace
 

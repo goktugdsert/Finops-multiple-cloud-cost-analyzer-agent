@@ -54,9 +54,7 @@ def upsert_policy(repo: WarehouseRepository, policy: Policy, *, enabled: bool = 
     )
     if existing:
         repo.execute(
-            update(policies_table)
-            .where(policies_table.c.policy_id == policy.id)
-            .values(**values)
+            update(policies_table).where(policies_table.c.policy_id == policy.id).values(**values)
         )
     else:
         repo.execute(insert(policies_table).values(policy_id=policy.id, **values))
