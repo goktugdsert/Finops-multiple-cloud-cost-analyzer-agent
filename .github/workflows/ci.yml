@@ -55,7 +55,7 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check .
 
-      - name: Apply migrations (validates the full 0001→0004 chain on a fresh DB)
+      - name: Apply migrations (validates the full 0001→0007 chain on a fresh DB)
         run: uv run alembic upgrade head
 
       - name: Run tests (unit + integration)

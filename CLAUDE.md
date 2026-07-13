@@ -262,7 +262,7 @@ and `mcca` run the **runtime faithfulness guard** on every answer (see below).
 
 ## CI + README
 - **CI**: `.github/workflows/ci.yml` runs on every push/PR — ruff (lint+format), the full
-  `0001→0004` migration chain against a fresh Postgres service, and the whole test suite
+  `0001→0007` migration chain against a fresh Postgres service, and the whole test suite
   (unit + integration via a scripted model; no cloud creds or LLM key needed).
 - **README.md**: rewritten from the old scaffold stub to reflect the finished project
   (what-it-is, trust boundary, setup, run commands, demo prompts, honest debt callout).
