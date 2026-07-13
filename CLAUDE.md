@@ -155,8 +155,8 @@ track-vs-budget (`budgets/`) → route-to-owner (`routing/`).
 ## As-built directory layout (extends the one above)
 ```
 src/mcca/
-  config.py logging.py tracing.py __main__.py      # tracing.py = Langfuse
-  warehouse/  schema.py(focus_costs+budgets) models.py engine.py
+  config.py logging.py tracing.py __main__.py simulate.py  # simulate.py = live feed CLI
+  warehouse/  schema.py(focus_costs+budgets+policies+recommendation_decisions) models.py engine.py
               repository.py(interface: execute/insert/create_schema/fetch_all) postgres.py
   ingestion/
     attribution.py                                  # shared tag->x_* policy (cross-cloud)
@@ -238,6 +238,17 @@ only the human `mcca-review` CLI records decisions); `search_knowledge` is QUALI
   **web approval buttons** — a "Recommendations & approvals" dashboard panel + `POST /decide`
   endpoint (records intent only); (d) **empty-answer retry** in the graph. Proven:
   `test_graph.py`, snooze/policy integration tests, `test_report.py`/`test_web.py`.
+- ✅ **Live near-real-time simulator** (`mcca-simulate`, `simulate.py`) — advances the clock one
+  day per tick and re-ingests the window through the REAL loaders (idempotent upsert, no
+  double-count). The newest AWS day arrives as a partial-day ESTIMATE (`estimate_from`/
+  `estimate_factor` in the generator) and is restated to final next tick — a live demo of
+  estimate→final reconciliation. A monitor runs detection/governance/budget each tick and
+  prints NEW findings. Pairs with `mcca-web ?refresh=N` (auto-reload). Composition-root CLI;
+  does NOT touch the trust boundary. Proven: `tests/integration/test_simulate_seed.py`.
+- ✅ **Dashboard redesign** (`surface/report.py`) — validated colorblind-safe palette, light +
+  dark mode, KPI tiles, a **daily forecast area chart with an interactive hover crosshair**
+  (day-by-day tooltip + band), categorical department/provider bars, a budget progress meter,
+  and the recommendations/policy panels. Self-contained (inline SVG/CSS/JS, no external libs).
 - **v2 roadmap complete.** Remaining out-of-scope by principle: optimization auto-actioning
   (permanent — read-only), and open-ended text-to-SQL (numbers stay behind the fixed queries).
 
@@ -302,6 +313,10 @@ query/tool. Prior local-9B mis-narration issues are now mostly addressed:
   model once with a nudge when it ends with neither a tool call nor any text.
 - **`contracted_cost` — POPULATED.** The negotiated tier is modeled (AWS fully; Azure/GCP use
   documented defaults). The FOCUS list→contracted→billed→effective stack is now complete.
+- **LAPACK "DLASCLS" noise on tiny/degenerate history — FIXED.** `forecast_series` now returns
+  a flat forecast (nominal band, no least-squares/ARIMA fit) when history has <3 points, is
+  non-finite, or is constant — so a near-empty warehouse or the simulator's first ticks no
+  longer spam LAPACK warnings or return NaN. Proven: `test_forecasting.py`.
 
 ## Open v1 debts (require real data) — NOT done, do not mark done
 These are unverifiable by construction until a real billing account exists. They are
@@ -333,22 +348,44 @@ Also requires real accounts (structural, not a correctness debt):
 - **CUR / line-item** granularity (resource-level, richer tags) — CE/Query/export aggregated
   shapes used instead.
 
-## Optional polish
-- ✅ **DONE** — Forecast-narration guardrail (see Reliability work).
-- ✅ **DONE** — CI (GitHub Actions, runs on push/PR).
-- ✅ **DONE** — README rewritten for the finished project.
-- ✅ **DONE** — Runtime faithfulness guard (web + CLI).
-- **NOT done (declined for now)** — `qwen3.5:4b` as a faster local option; qwen3.5:9b is the
-  chosen tradeoff.
-- **NOT done (minor)** — empty-final-answer retry; `contracted_cost` population (see nits).
+## Polish — DONE
+Forecast-narration guardrail · CI (GitHub Actions) · README rewrite · runtime faithfulness
+guard · empty-answer retry · `contracted_cost` population · weighted-allocation fix · v2 eval
+cases (4/4 vs qwen3.5:9b) · configurable policies · snooze-expiry · web approval buttons ·
+live simulator · dashboard redesign · forecasting degenerate-input guard. CI is green on the
+pushed HEAD.
+
+## What's next (optional — no real data needed; nothing here is required)
+The project is feature-complete for its scope; these are genuine *could-do* items, not gaps:
+- **Higher-fidelity mock data** — region distribution, CUR-level (resource) granularity,
+  monthly/quarterly seasonality, richer tag gaps. MUST stay deterministic-per-seed with a
+  computable ground truth (that is what `mcca-eval-numeric` depends on).
+- **RAG backend swap** — the `Retriever` interface allows a pgvector/embedding backend later;
+  the default lexical retriever is deliberate (free/lean) and sufficient for the small corpus.
+- **Azure/GCP negotiated tier** — `contracted_cost` uses a documented default there (AWS is
+  fully modeled); modeling their negotiated rates would complete the parity.
+- **Persisted allocation policy** — allocation `weights` are a per-call arg; a stored default
+  (like budgets/policies) would mirror the governance store.
+- **Proactive alerting** — the simulator's monitor prints findings; wiring notifications
+  (email/Slack/webhook) would make it a true watch. (Recommend-only — never auto-actions.)
+- **`DEMO.md`** — a one-page in-repo presentation script (offered).
+- Declined for now: `qwen3.5:4b` faster local model (9B is the chosen tradeoff).
+
+## What's MISSING (the real gap) — requires real billing data
+See **"Open v1 debts"** above. The three debts (reconcile-to-console, real-CUR normalization
+confirmation, live access-scoping) are the only substantive missing pieces, and they are
+unverifiable by construction until a real cloud account exists. No amount of synthetic work —
+including the live simulator — closes them; they close the instant real billing data is
+available. Do not mark them done.
 
 ## Deviations from the original plan
 - **Tracing: Langfuse instead of LangSmith** (user decision).
 - **Synthetic-only for now** — no real cloud accounts available; real-console reconciliation
   is deferred as an explicit **open v1 debt** (see above), NOT retired. It closes the instant
   real billing data is available.
-- **"Surface" built as an interactive web chat UI** (`mcca-web`, FastAPI) in addition to
-  the static HTML report — this is the user-facing "dashboard".
+- **"Surface" built as an interactive web chat UI** (`mcca-web`, FastAPI) — a redesigned
+  dashboard (KPI tiles, hover forecast chart, dark mode, approval buttons) plus the chat, in
+  addition to the static HTML report. A live `mcca-simulate` feed can drive it in real time.
 
 ## Env quirks (Windows dev machine)
 `uv` at `~/.local/bin` (not on PATH in fresh tool shells — prepend it). Docker Desktop
