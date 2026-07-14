@@ -378,6 +378,38 @@ unverifiable by construction until a real cloud account exists. No amount of syn
 including the live simulator — closes them; they close the instant real billing data is
 available. Do not mark them done.
 
+## Demo script (how to present this)
+**Pre-flight (off-screen):** `docker compose up -d` → `uv run alembic upgrade head` →
+`uv run mcca-seed` → confirm `ollama list` shows qwen3.5:9b → **warm the model** with one
+`uv run mcca "…"` (the first answer is slow). Open 2 terminals + a browser.
+NOTE: the local 9B takes ~1 min/answer — never demo the chat cold; fill the pause by
+explaining the trust boundary.
+
+1. **Live feed (~2 min).** Terminal A: `uv run mcca-web`. Browser:
+   `http://127.0.0.1:8000/?refresh=5` (shows "No cost data yet"). Terminal B:
+   `uv run mcca-simulate --days 45 --interval 3`. Watch the dashboard fill: KPIs climb, the
+   forecast chart extends, bars grow. Point at the tick line: *"today arrives as a partial-day
+   ESTIMATE, then is restated to final next tick — and the row count doesn't grow, because
+   ingestion is keyed on the billing line's identity."* Point at the `NEW` lines: a spike is
+   detected (~day 38–45), budget flips OVER, a policy violation appears.
+2. **Grounded agent (~2 min).** In the chat: *"Were there any cost spikes between 2025-10-01
+   and 2025-11-15?"* While it thinks, explain: the model picks a tool, the tool runs a
+   validated query, the answer only relays those figures; a runtime guard flags any untraceable
+   figure.
+3. **Provably correct (~1 min, no LLM).** `uv run mcca-eval-numeric` → 9/9 fixture-exact.
+   *"Not just plausible — provably correct against ground truth."*
+4. **Human-in-the-loop (optional).** `uv run mcca-review --months 3` → approve one →
+   re-list shows APPROVED. *"A human approves; intent recorded only — nothing is executed."*
+
+**Closing line:** *"Everything you saw — the live dashboard, the monitor's findings, the
+agent's answer — came from a deterministic query. The simulator only feeds data through the
+real pipeline; it cannot fabricate a figure."* (Honest aside if asked: synthetic data — it
+does not replace reconciling to a real cloud bill.)
+
+**Fallbacks:** `mcca-simulate` clears the warehouse itself, so it is re-runnable; `mcca-seed`
+restores the full static dataset. If the LLM stalls, pivot to step 3 (instant, stronger point).
+5-min cut: step 1 → step 3 → closing line.
+
 ## Deviations from the original plan
 - **Tracing: Langfuse instead of LangSmith** (user decision).
 - **Synthetic-only for now** — no real cloud accounts available; real-console reconciliation
