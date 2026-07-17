@@ -1,8 +1,8 @@
 """Integration: the agent loop runs tools against Postgres and answers — no LLM key.
 
-A scripted fake model stands in for Claude: it emits one `total_spend` tool call, then a
+A scripted fake model stands in for the LLM: it emits one `total_spend` tool call, then a
 final answer. This exercises the REAL graph (model -> tools -> model), the REAL cost tools,
-and the REAL warehouse queries, proving the wiring end-to-end without an Anthropic API key.
+and the REAL warehouse queries, proving the wiring end-to-end without any LLM API key.
 Requires `docker compose up -d`; skips if Postgres is unreachable.
 """
 
@@ -31,7 +31,7 @@ END = date(2026, 5, 1)
 
 
 class ScriptedModel(BaseChatModel):
-    """Fake Claude: one tool call to total_spend, then a final textual answer."""
+    """Fake LLM: one tool call to total_spend, then a final textual answer."""
 
     @property
     def _llm_type(self) -> str:

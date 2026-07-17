@@ -1,6 +1,6 @@
 """Access-scoping verification: least-privilege, read-only, no write path — sans real creds.
 
-CLAUDE.md requires read-only, least-privilege access and that nothing ever touches
+ARCHITECTURE.md requires read-only, least-privilege access and that nothing ever touches
 infrastructure. This module verifies everything checkable WITHOUT a live account:
 
   * config: credentials are never hardcoded and come only from Settings (env/.env);

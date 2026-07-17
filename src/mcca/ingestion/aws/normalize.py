@@ -2,7 +2,7 @@
 
 This is where cross-cloud correctness is earned. The mapping choices below are v1
 defaults and MUST be validated against the AWS Cost Explorer console before the numbers
-are trusted (CLAUDE.md, "where quality lives").
+are trusted (ARCHITECTURE.md, "where quality lives").
 
 Cost-measure mapping (Cost Explorer metric -> FOCUS column):
     billed_cost     <- NetUnblendedCost   (invoiced amount, after credits/refunds)

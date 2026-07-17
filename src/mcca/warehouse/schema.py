@@ -8,7 +8,7 @@ ATTRIBUTION block (`x_*` custom columns) that exists from row one.
 Attribution: every row carries team / service / environment / owner. When source data
 lacks the tags to fill them, they default to the literal ``'unattributed'`` — untagged
 spend is shown honestly, never dropped and never guessed. The *policy* that maps cloud
-tags to these columns is deferred (see CLAUDE.md); here we only reserve the columns and
+tags to these columns is deferred (see ARCHITECTURE.md); here we only reserve the columns and
 the fallback.
 
 Core principle: this schema is a destination for numbers produced by deterministic

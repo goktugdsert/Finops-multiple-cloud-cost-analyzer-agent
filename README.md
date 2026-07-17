@@ -27,7 +27,7 @@ tracing. **223 tests pass** (+1 intentionally skipped live-credential check).
 Three items remain open debts that require real billing data and are explicitly **not**
 done: real-console reconciliation, real-CUR confirmation of RI/SP/credit/blended handling,
 and the live least-privilege access-scoping check. See
-[CLAUDE.md → Open v1 debts](CLAUDE.md).
+[ARCHITECTURE.md → Open v1 debts](ARCHITECTURE.md).
 
 ## What it does — the FinOps loop
 
@@ -151,6 +151,6 @@ via a scripted model — no cloud creds or LLM key) on every push and PR.
 
 ## More
 
-- **Full scope, principles, as-built status, and open debts:** [CLAUDE.md](CLAUDE.md)
+- **Full scope, principles, as-built status, and open debts:** [ARCHITECTURE.md](ARCHITECTURE.md)
 - **Data model:** FOCUS (FinOps Open Cost & Usage Specification), Postgres in v1 behind a
   `WarehouseRepository` interface so the store can be swapped without touching agent logic.

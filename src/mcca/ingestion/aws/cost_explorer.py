@@ -12,7 +12,7 @@ Design notes (v1):
   the Cost & Usage Report (CUR) and are deferred.
 - Metrics requested cover blended vs unblended and amortization so normalization can pick
   the correct FOCUS cost measures (see normalize.py). Numbers must be validated against
-  the Cost Explorer console before being trusted (CLAUDE.md).
+  the Cost Explorer console before being trusted (ARCHITECTURE.md).
 """
 
 from __future__ import annotations

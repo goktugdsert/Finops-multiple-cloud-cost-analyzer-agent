@@ -1,7 +1,7 @@
 """Attribution queries: spend grouped by the FOCUS x_* attribution dimensions.
 
 Until an allocation policy is defined, most spend groups under 'unattributed' — shown
-honestly, per CLAUDE.md.
+honestly, per ARCHITECTURE.md.
 """
 
 from __future__ import annotations
